@@ -1,17 +1,9 @@
-open Core
-open Graph
-open Printf
-open Castor
+open! Core
+open! Castor
 open Collections
 module A = Abslayout
 
 module Config = struct
-  module type My_S = sig
-    val cost_conn : Db.t
-
-    val params : Set.M(Name).t
-  end
-
   module type S = sig
     include Ops.Config.S
 
@@ -19,394 +11,74 @@ module Config = struct
 
     include Simple_tactics.Config.S
 
-    include My_S
+    include Approx_cost.Config.S
   end
 end
 
 module Make (C : Config.S) = struct
-  module My_C : Config.My_S = C
-
-  open My_C
   module O = Ops.Make (C)
   open O
   module S = Simple_tactics.Make (C)
   open S
   module R = Resolve
-
-  module JoinGraph = struct
-    module Vertex = struct
-      include Abslayout
-
-      let equal = [%compare.equal: t]
-    end
-
-    module Edge = struct
-      include Pred
-
-      let default = A.Bool true
-    end
-
-    module G = Persistent.Graph.ConcreteLabeled (Vertex) (Edge)
-    include G
-    include Oper.P (G)
-    module Dfs = Traverse.Dfs (G)
-    include Oper.Choose (G)
-
-    let to_string g =
-      sprintf "graph (|V|=%d) (|E|=%d)" (nb_vertex g) (nb_edges g)
-
-    let sexp_of_t g =
-      fold_edges_e (fun e l -> e :: l) g []
-      |> [%sexp_of: (Vertex.t * Edge.t * Vertex.t) list]
-
-    let compare g1 g2 = Sexp.compare ([%sexp_of: t] g1) ([%sexp_of: t] g2)
-
-    let add_or_update_edge g ((v1, l, v2) as e) =
-      try
-        let _, l', _ = find_edge g v1 v2 in
-        add_edge_e g (v1, Binop (And, l, l'), v2)
-      with Caml.Not_found -> add_edge_e g e
-
-    let vertices g = fold_vertex (fun v l -> v :: l) g []
-
-    let partition g vs =
-      let g1, g2 =
-        fold_vertex
-          (fun v (lhs, rhs) ->
-            let in_set = Set.mem vs v in
-            let lhs = if in_set then remove_vertex lhs v else lhs in
-            let rhs = if in_set then rhs else remove_vertex rhs v in
-            (lhs, rhs))
-          g (g, g)
-      in
-      let es =
-        fold_edges_e
-          (fun ((v1, _, v2) as e) es ->
-            if
-              (Set.mem vs v1 && not (Set.mem vs v2))
-              || ((not (Set.mem vs v1)) && Set.mem vs v2)
-            then e :: es
-            else es)
-          g []
-      in
-      (g1, g2, es)
-
-    let is_connected g =
-      let n = nb_vertex g in
-      let n = Dfs.fold_component (fun _ i -> i - 1) n g (choose_vertex g) in
-      n = 0
-  end
-
-  let source_relation leaves n =
-    List.find_map leaves ~f:(fun (r, s) ->
-        if Set.mem s n then Some r else None)
-    |> Result.of_option
-         ~error:
-           Error.(
-             create "No source found for name."
-               (n, List.map leaves ~f:(fun (_, ns) -> ns))
-               [%sexp_of: Name.t * Set.M(Name).t list])
-
-  module JoinSpace = struct
-    module T = struct
-      type t =
-        {graph: JoinGraph.t; filters: Set.M(Pred).t Map.M(JoinGraph.Vertex).t}
-      [@@deriving compare, sexp_of]
-
-      let t_of_sexp _ = failwith "unimplemented"
-    end
-
-    include T
-    module C = Comparable.Make (T)
-
-    module O : Comparable.Infix with type t := t = C
-
-    let to_string {graph; _} = JoinGraph.to_string graph
-
-    let empty =
-      {graph= JoinGraph.empty; filters= Map.empty (module JoinGraph.Vertex)}
-
-    let union s1 s2 =
-      let merger ~key:_ = function
-        | `Left x | `Right x -> Some x
-        | `Both (x, y) -> Some (Set.union x y)
-      in
-      { graph= JoinGraph.union s1.graph s2.graph
-      ; filters= Map.merge ~f:merger s1.filters s2.filters }
-
-    let length {graph; _} = JoinGraph.nb_vertex graph
-
-    let choose {graph; _} = JoinGraph.choose_vertex graph
-
-    let contract join g =
-      let open JoinGraph in
-      (* if the edge is to be removed (property = true):
-     * make a union of the two union-sets of start and end node;
-     * put this set in the map for all nodes in this set *)
-      let f edge m =
-        let s_src, j_src = Map.find_exn m (E.src edge) in
-        let s_dst, j_dst = Map.find_exn m (E.dst edge) in
-        let s = Set.union s_src s_dst in
-        let j = join ~label:(G.E.label edge) j_src j_dst in
-        Set.fold
-          ~f:(fun m vertex -> Map.set m ~key:vertex ~data:(s, j))
-          s ~init:m
-      in
-      (* initialize map with singleton-sets for every node (of itself) *)
-      let m =
-        G.fold_vertex
-          (fun vertex m ->
-            Map.set m ~key:vertex
-              ~data:(Set.singleton (module Vertex) vertex, vertex))
-          g
-          (Map.empty (module Vertex))
-      in
-      G.fold_edges_e f g m |> Map.data |> List.hd_exn |> fun (_, j) -> j
-
-    let to_ralgebra {graph; _} =
-      if JoinGraph.nb_vertex graph = 1 then JoinGraph.choose_vertex graph
-      else contract (fun ~label:p j1 j2 -> A.join p j1 j2) graph
-
-    (** Collect the leaves of the join tree rooted at r. *)
-    let rec to_leaves r =
-      let open A in
-      match r.node with
-      | Join {r1; r2; _} -> Set.union (to_leaves r1) (to_leaves r2)
-      | _ -> Set.singleton (module A) r
-
-    (** Convert a join tree to a join graph. *)
-    let rec to_graph leaves r =
-      match r.A.node with
-      | Join {r1; r2; pred= p} ->
-          let s = union (to_graph leaves r1) (to_graph leaves r2) in
-          (* Collect the set of relations that this join depends on. *)
-          List.fold_left (Pred.conjuncts p) ~init:s ~f:(fun s p ->
-              let pred_rels =
-                List.map
-                  (Pred.names p |> Set.to_list)
-                  ~f:(source_relation leaves)
-                |> Or_error.all
-              in
-              match pred_rels with
-              | Ok [] ->
-                  Logs.warn (fun m ->
-                      m "Join-opt: Unhandled predicate %a. Constant predicate."
-                        A.pp_pred p) ;
-                  s
-              | Ok [r] ->
-                  { s with
-                    filters=
-                      Map.update s.filters r ~f:(function
-                        | Some fs -> Set.add fs p
-                        | None -> Set.singleton (module Pred) p) }
-              | Ok [r1; r2] ->
-                  { s with
-                    graph= JoinGraph.add_or_update_edge s.graph (r1, p, r2) }
-              | Ok _ ->
-                  Logs.warn (fun m ->
-                      m "Join-opt: Unhandled predicate %a. Too many relations."
-                        A.pp_pred p) ;
-                  s
-              | Error e ->
-                  Logs.warn (fun m ->
-                      m "Join opt: Unhandled predicate %a. %a" A.pp_pred p
-                        Error.pp e) ;
-                  s)
-      | _ -> empty
-
-    let of_abslayout r =
-      Logs.debug (fun m -> m "Join-opt: Planning join for %a." A.pp r) ;
-      let leaves =
-        to_leaves r |> Set.to_list
-        |> List.map ~f:(fun r ->
-               let s = A.schema_exn r |> Set.of_list (module Name) in
-               (r, s))
-      in
-      to_graph leaves r
-
-    let partition_fold ~init ~f s =
-      let vertices = JoinGraph.vertices s.graph |> Array.of_list in
-      let n = Array.length vertices in
-      let rec loop acc k =
-        if k >= n then acc
-        else
-          let acc =
-            Combinat.Combination.fold (k, n) ~init:acc ~f:(fun acc vs ->
-                let g1, g2, es =
-                  JoinGraph.partition s.graph
-                    ( List.init k ~f:(fun i -> vertices.(vs.{i}))
-                    |> Set.of_list (module JoinGraph.Vertex) )
-                in
-                if JoinGraph.is_connected g1 && JoinGraph.is_connected g2 then
-                  let s1 = {s with graph= g1} in
-                  let s2 = {s with graph= g2} in
-                  f acc (s1, s2, es)
-                else acc)
-          in
-          loop acc (k + 1)
-      in
-      loop init 1
-  end
+  module ACost = Approx_cost.Make (C)
 
   type t =
     | Flat of A.t
-    | Hash of {lkey: A.pred; lhs: t; rkey: A.pred; rhs: t}
-    | Nest of {lhs: t; rhs: t; pred: A.pred}
+    | Hash of { lkey : A.pred; lhs : t; rkey : A.pred; rhs : t }
+    | Nest of { lhs : t; rhs : t; pred : A.pred }
   [@@deriving sexp_of]
 
-  let rec to_ralgebra = function
-    | Flat r -> r
-    | Nest {lhs; rhs; pred} -> A.join pred (to_ralgebra lhs) (to_ralgebra rhs)
-    | Hash {lkey; rkey; lhs; rhs} ->
-        A.join (Binop (Eq, lkey, rkey)) (to_ralgebra lhs) (to_ralgebra rhs)
+  let rec emit_joins =
+    let module J = Join_elim_tactics.Make (C) in
+    let open J in
+    function
+    | Flat _ -> row_store
+    | Hash { lhs; rhs; _ } ->
+        seq_many
+          [
+            at_ (emit_joins lhs) (child 0);
+            at_ (emit_joins rhs) (child 1);
+            elim_join_hash;
+          ]
+    | Nest { lhs; rhs; _ } ->
+        seq_many
+          [
+            at_ (emit_joins lhs) (child 0);
+            at_ (emit_joins rhs) (child 1);
+            elim_join_nest;
+          ]
 
-  module Cost = struct
-    let read = function
-      | Type.PrimType.(IntT _ | DateT _ | FixedT _ | StringT _) -> 4.0
-      | BoolT _ -> 1.0
-      | _ -> failwith "Unexpected type."
-
-    let hash = function
-      | Type.PrimType.(IntT _ | DateT _ | FixedT _ | BoolT _) -> 1.0
-      | StringT _ -> 100.0
-      | _ -> failwith "Unexpected type."
-
-    let size = function
-      | Type.PrimType.(IntT _ | DateT _ | FixedT _) -> 4.0
-      | StringT _ -> 25.0
-      | BoolT _ -> 1.0
-      | _ -> failwith "Unexpected type."
-
-    (* TODO: Not all lists have 16B headers *)
-    let list_size = 16.0
-  end
-
-  let ntuples r =
-    let r = to_ralgebra r in
-    ( Explain.explain cost_conn (Sql.of_ralgebra r |> Sql.to_string)
-    |> Or_error.ok_exn )
-      .nrows |> Float.of_int
-
-  let schema_types r = A.schema_exn r |> List.map ~f:Name.type_exn
-
-  let rec to_abslayout = function
-    | Flat r -> r
-    | Nest {lhs; rhs; pred} ->
-        A.join pred (to_abslayout lhs) (to_abslayout rhs)
-    | Hash {lkey; rkey; lhs; rhs} ->
-        A.(join (Binop (Eq, lkey, rkey)) (to_abslayout lhs) (to_abslayout rhs))
-
-  let estimate_ntuples_parted parts r =
-    let s = A.schema_exn (to_ralgebra r) |> Set.of_list (module Name) in
-    let parts = Set.filter parts ~f:(Set.mem s) in
-    let part_counts =
-      A.(
-        group_by
-          [Pred.as_pred (Count, "c")]
-          (Set.to_list parts) (to_abslayout r))
+  let reshape j _ =
+    let rec to_ralgebra = function
+      | Flat r -> r
+      | Nest { lhs; rhs; pred } ->
+          A.join pred (to_ralgebra lhs) (to_ralgebra rhs)
+      | Hash { lkey; rkey; lhs; rhs } ->
+          A.join (Binop (Eq, lkey, rkey)) (to_ralgebra lhs) (to_ralgebra rhs)
     in
-    let part_aggs =
-      let c = A.(Name (Name.create "c")) in
-      A.(select [Min c; Max c; Avg c] part_counts)
-    in
-    let part_aggs = R.resolve ~params part_aggs in
-    let sql = Sql.of_ralgebra part_aggs in
-    let tups =
-      Db.exec_cursor_exn cost_conn
-        Type.PrimType.
-          [ IntT {nullable= false}
-          ; IntT {nullable= false}
-          ; FixedT {nullable= false} ]
-        (Sql.to_string sql)
-    in
-    match Gen.to_list tups with
-    | [|Int min; Int max; Fixed avg|] :: _ ->
-        (min, max, Fixed_point.to_float avg)
-    | _ -> failwith "Unexpected tuples."
+    Some (to_ralgebra j)
+
+  let mk_transform j = seq (of_func (reshape j)) (emit_joins j)
 
   let to_parts rhs pred =
     let rhs_schema = A.schema_exn rhs |> Set.of_list (module Name) in
     Pred.names pred |> Set.filter ~f:(Set.mem rhs_schema)
 
-  let rec size_cost parts r =
-    let sum = List.sum (module Float) in
-    match r with
-    | Flat _ ->
-        let _, _, nt = estimate_ntuples_parted parts r in
-        (sum (schema_types (to_ralgebra r)) ~f:Cost.size *. nt)
-        +. Cost.list_size
-    | Nest {lhs; rhs; pred} ->
-        let _, _, lhs_nt = estimate_ntuples_parted parts lhs in
-        let rhs_per_partition_cost =
-          size_cost (Set.union (to_parts (to_ralgebra rhs) pred) parts) rhs
-        in
-        size_cost parts lhs +. (lhs_nt *. rhs_per_partition_cost)
-    | Hash {lhs; rhs; _} -> size_cost parts lhs +. size_cost parts rhs
-
-  let rec scan_cost parts r =
-    let sum = List.sum (module Float) in
-    match r with
-    | Flat _ ->
-        let _, _, nt = estimate_ntuples_parted parts r in
-        sum (schema_types (to_ralgebra r)) ~f:Cost.read *. nt
-    | Nest {lhs; rhs; pred} ->
-        let _, _, lhs_nt = estimate_ntuples_parted parts lhs in
-        let rhs_per_partition_cost =
-          scan_cost (Set.union (to_parts (to_ralgebra rhs) pred) parts) rhs
-        in
-        scan_cost parts lhs +. (lhs_nt *. rhs_per_partition_cost)
-    | Hash {lkey; lhs; rhs; rkey} ->
-        let _, _, nt_lhs = estimate_ntuples_parted parts lhs in
-        let rhs_per_partition_cost =
-          let pred = A.(Binop (Eq, lkey, rkey)) in
-          scan_cost (Set.union (to_parts (to_ralgebra rhs) pred) parts) rhs
-        in
-        scan_cost parts lhs
-        +. (nt_lhs *. (Cost.hash (Pred.to_type lkey) +. rhs_per_partition_cost))
-
-  module ParetoSet = struct
-    type 'a t = (float array * 'a) list
-
-    let empty = []
-
-    let singleton c v = [(c, v)]
-
-    let dominates x y =
-      assert (Array.length x = Array.length y) ;
-      let n = Array.length x in
-      let rec loop i le lt =
-        if i = n then le && lt
-        else
-          loop (i + 1) Float.(le && x.(i) <= y.(i)) Float.(lt || x.(i) < y.(i))
-      in
-      loop 0 true false
-
-    let rec add s c v =
-      match s with
-      | [] -> [(c, v)]
-      | (c', v') :: s' ->
-          if Array.equal Float.( = ) c c' || dominates c' c then s
-          else if dominates c c' then add s' c v
-          else (c', v') :: add s' c v
-
-    let min_elt f s =
-      List.map s ~f:(fun (c, x) -> (f c, x))
-      |> List.min_elt ~compare:(fun (c1, _) (c2, _) -> Float.compare c1 c2)
-      |> Option.map ~f:(fun (_, x) -> x)
-
-    let of_list l = List.fold_left l ~init:[] ~f:(fun s (c, v) -> add s c v)
-
-    let union_all ss = List.concat ss |> of_list
-  end
+  let cost join =
+    [|
+      ACost.cost
+        (Option.value_exn (O.apply (mk_transform join) Path.root A.empty));
+    |]
 
   let opt_nonrec opt parts s =
     Logs.debug (fun m ->
-        m "Choosing join for space %s." (JoinSpace.to_string s)) ;
-    if JoinSpace.length s = 1 then
-      let j = Flat (JoinSpace.choose s) in
-      ParetoSet.singleton [|scan_cost parts j|] j
+        m "Choosing join for space %s." (Join_space.to_string s));
+    if Join_space.length s = 1 then
+      let j = Flat (Join_space.choose s) in
+      Pareto_set.singleton (cost j) j
     else
-      JoinSpace.partition_fold s ~init:ParetoSet.empty
+      Join_space.partition_fold s ~init:Pareto_set.empty
         ~f:(fun cs (s1, s2, es) ->
           let pred = Pred.conjoin (List.map es ~f:(fun (_, p, _) -> p)) in
           (* Add flat joins to pareto set. *)
@@ -418,33 +90,33 @@ module Make (C : Config.S) = struct
             List.cartesian_product (select_flat s1) (select_flat s2)
             |> List.map ~f:(fun (r1, r2) ->
                    let j = Flat (A.join pred r1 r2) in
-                   ([|scan_cost parts j|], j))
-            |> ParetoSet.of_list
+                   (cost j, j))
+            |> Pareto_set.of_list
           in
           (* Add nest joins to pareto set. *)
-          (* let nest_joins =
-           *   let lhs_parts =
-           *     Set.union (to_parts (JoinSpace.to_ralgebra s1) pred) parts
-           *   in
-           *   let rhs_parts =
-           *     Set.union (to_parts (JoinSpace.to_ralgebra s2) pred) parts
-           *   in
-           *   let lhs_set = List.map (opt lhs_parts s1) ~f:(fun (_, j) -> j) in
-           *   let rhs_set = List.map (opt rhs_parts s2) ~f:(fun (_, j) -> j) in
-           *   List.cartesian_product lhs_set rhs_set
-           *   |> List.map ~f:(fun (j1, j2) ->
-           *          let j = Nest {lhs= j1; rhs= j2; pred} in
-           *          ([|scan_cost parts j|], j) )
-           *   |> ParetoSet.of_list
-           * in *)
+          let nest_joins =
+            let lhs_parts =
+              Set.union (to_parts (Join_space.to_ralgebra s1) pred) parts
+            in
+            let rhs_parts =
+              Set.union (to_parts (Join_space.to_ralgebra s2) pred) parts
+            in
+            let lhs_set = List.map (opt lhs_parts s1) ~f:(fun (_, j) -> j) in
+            let rhs_set = List.map (opt rhs_parts s2) ~f:(fun (_, j) -> j) in
+            List.cartesian_product lhs_set rhs_set
+            |> List.map ~f:(fun (j1, j2) ->
+                   let j = Nest { lhs = j1; rhs = j2; pred } in
+                   (cost j, j))
+            |> Pareto_set.of_list
+          in
           (* Add hash joins to pareto set. *)
           let hash_joins =
             let lhs_schema =
-              A.schema_exn (JoinSpace.to_ralgebra s1)
+              A.schema_exn (Join_space.to_ralgebra s1)
               |> Set.of_list (module Name)
             in
             let rhs_schema =
-              A.schema_exn (JoinSpace.to_ralgebra s2)
+              A.schema_exn (Join_space.to_ralgebra s2)
               |> Set.of_list (module Name)
             in
             (* Figure out which partition a key comes from. *)
@@ -460,34 +132,33 @@ module Make (C : Config.S) = struct
                   let open Option.Let_syntax in
                   let%bind s1 = key_side k1 in
                   let%map s2 = key_side k2 in
-                  if JoinSpace.O.(s1 = s2) then []
+                  if Join_space.O.(s1 = s2) then []
                   else
                     let rhs_parts =
                       Set.union
-                        (to_parts (JoinSpace.to_ralgebra s2) pred)
+                        (to_parts (Join_space.to_ralgebra s2) pred)
                         parts
                     in
                     List.cartesian_product (opt parts s1) (opt rhs_parts s2)
                     |> List.map ~f:(fun ((_, r1), (_, r2)) ->
-                           Hash {lkey= k1; rkey= k2; lhs= r1; rhs= r2})
+                           Hash { lkey = k1; rkey = k2; lhs = r1; rhs = r2 })
               | _ -> None
             in
-            Option.value m_s ~default:[]
-            |> List.map ~f:(fun j -> ([|scan_cost parts j|], j))
+            Option.value m_s ~default:[] |> List.map ~f:(fun j -> (cost j, j))
           in
-          ParetoSet.union_all [cs; flat_joins; (* nest_joins; *) hash_joins])
+          Pareto_set.union_all [ cs; flat_joins; nest_joins; hash_joins ])
 
   let opt =
     let module Key = struct
-      type t = Set.M(Name).t * Set.M(JoinGraph.Vertex).t
+      type t = Set.M(Name).t * Set.M(Join_graph.Vertex).t
       [@@deriving compare, hash, sexp_of]
 
       let create p s =
-        ( p
-        , JoinGraph.fold_vertex
+        ( p,
+          Join_graph.fold_vertex
             (fun v vs -> Set.add vs v)
-            s.JoinSpace.graph
-            (Set.empty (module JoinGraph.Vertex)) )
+            s.Join_space.graph
+            (Set.empty (module Join_graph.Vertex)) )
     end in
     let tbl = Hashtbl.create (module Key) in
     let rec opt p s =
@@ -496,37 +167,299 @@ module Make (C : Config.S) = struct
       | Some v -> v
       | None ->
           let v = opt_nonrec opt p s in
-          Hashtbl.add_exn tbl ~key ~data:v ;
+          Hashtbl.add_exn tbl ~key ~data:v;
           v
     in
     opt
 
-  let opt r = opt (Set.empty (module Name)) (JoinSpace.of_abslayout r)
-
-  let reshape j _ = Some (to_ralgebra j)
-
-  let rec emit_joins =
-    let module J = Join_elim_tactics.Make (C) in
-    let open J in
-    function
-    | Flat _ -> row_store
-    | Hash {lhs; rhs; _} ->
-        seq_many
-          [ at_ (emit_joins lhs) (child 0)
-          ; at_ (emit_joins rhs) (child 1)
-          ; elim_join_hash ]
-    | Nest {lhs; rhs; _} ->
-        seq_many
-          [ at_ (emit_joins lhs) (child 0)
-          ; at_ (emit_joins rhs) (child 1)
-          ; elim_join_nest ]
+  let opt r = opt (Set.empty (module Name)) (Join_space.of_abslayout r)
 
   let transform =
     let f r =
       opt r
-      |> ParetoSet.min_elt (fun a -> a.(0))
-      |> Option.map ~f:(fun j -> seq (of_func (reshape j)) (emit_joins j))
+      |> Pareto_set.min_elt (fun a -> a.(0))
+      |> Option.map ~f:mk_transform
       |> Option.bind ~f:(fun tf -> apply tf Path.root r)
     in
     local f "join-opt"
 end
+
+let%test_module _ =
+  ( module struct
+    module Config = struct
+      let cost_conn = Db.create "postgresql:///tpch_1k"
+
+      let conn = cost_conn
+
+      let validate = false
+
+      let param_ctx = Map.empty (module Name)
+
+      let params = Set.empty (module Name)
+
+      let simplify = None
+    end
+
+    module Join_opt = Make (Config)
+    open Join_opt
+    module M = Abslayout_db.Make (Config)
+
+    let type_ = Type.PrimType.IntT { nullable = false }
+
+    let c_custkey = Name.create ~type_ "c_custkey"
+
+    let c_nationkey = Name.create ~type_ "c_nationkey"
+
+    let n_nationkey = Name.create ~type_ "n_nationkey"
+
+    let o_custkey = Name.create ~type_ "o_custkey"
+
+    let orders = Db.relation Config.cost_conn "orders"
+
+    let customer = Db.relation Config.cost_conn "customer"
+
+    let nation = Db.relation Config.cost_conn "nation"
+
+    let%expect_test "to-from-ralgebra" =
+      let r =
+        A.(
+          join
+            (Binop (Eq, Name c_nationkey, Name n_nationkey))
+            (relation nation) (relation customer))
+      in
+      Join_space.of_abslayout r |> Join_space.to_ralgebra
+      |> Format.printf "%a" Abslayout.pp;
+      [%expect {|
+    join((c_nationkey = n_nationkey), nation, customer) |}]
+
+    let%expect_test "to-from-ralgebra" =
+      let r =
+        A.(
+          join
+            (Binop (Eq, Name c_custkey, Name o_custkey))
+            (relation orders)
+            (join
+               (Binop (Eq, Name c_nationkey, Name n_nationkey))
+               (relation nation) (relation customer)))
+      in
+      Join_space.of_abslayout r |> Join_space.to_ralgebra
+      |> Format.printf "%a" Abslayout.pp;
+      [%expect
+        {|
+    join((c_custkey = o_custkey),
+      orders,
+      join((c_nationkey = n_nationkey), nation, customer)) |}]
+
+    let%expect_test "part-fold" =
+      let r =
+        A.(
+          join
+            (Binop (Eq, Name c_custkey, Name o_custkey))
+            (relation orders)
+            (join
+               (Binop (Eq, Name c_nationkey, Name n_nationkey))
+               (relation nation) (relation customer)))
+      in
+      let open Join_space in
+      of_abslayout r
+      |> partition_fold ~init:() ~f:(fun () (s1, s2, _) ->
+             Format.printf "%a@.%a@.---\n" Abslayout.pp (to_ralgebra s1)
+               Abslayout.pp (to_ralgebra s2));
+      [%expect
+        {|
+    join((c_nationkey = n_nationkey), nation, customer)
+    orders
+    ---
+    join((c_custkey = o_custkey), orders, customer)
+    nation
+    ---
+    nation
+    join((c_custkey = o_custkey), orders, customer)
+    ---
+    orders
+    join((c_nationkey = n_nationkey), nation, customer)
+    --- |}]
+
+    let%expect_test "join-opt" =
+      opt
+        A.(
+          join
+            (Binop (Eq, Name c_nationkey, Name n_nationkey))
+            (relation nation) (relation customer))
+      |> [%sexp_of: (float array * t) list] |> print_s;
+      [%expect
+        {|
+    (((998)
+      (Flat
+       ((node
+         (Join
+          ((pred
+            (Binop
+             (Eq (Name ((scope ()) (name c_nationkey)))
+              (Name ((scope ()) (name n_nationkey))))))
+           (r1
+            ((node
+              (Relation
+               ((r_name customer)
+                (r_schema
+                 ((((scope ()) (name c_custkey)) ((scope ()) (name c_name))
+                   ((scope ()) (name c_address)) ((scope ()) (name c_nationkey))
+                   ((scope ()) (name c_phone)) ((scope ()) (name c_acctbal))
+                   ((scope ()) (name c_mktsegment))
+                   ((scope ()) (name c_comment))))))))
+             (meta
+              ((free ())
+               (refcnt
+                ((((scope ()) (name c_acctbal)) 1)
+                 (((scope ()) (name c_address)) 1)
+                 (((scope ()) (name c_comment)) 1)
+                 (((scope ()) (name c_custkey)) 1)
+                 (((scope ()) (name c_mktsegment)) 1)
+                 (((scope ()) (name c_name)) 1)
+                 (((scope ()) (name c_nationkey)) 2)
+                 (((scope ()) (name c_phone)) 1)))))))
+           (r2
+            ((node
+              (Relation
+               ((r_name nation)
+                (r_schema
+                 ((((scope ()) (name n_nationkey)) ((scope ()) (name n_name))
+                   ((scope ()) (name n_regionkey)) ((scope ()) (name n_comment))))))))
+             (meta
+              ((free ())
+               (refcnt
+                ((((scope ()) (name n_comment)) 1) (((scope ()) (name n_name)) 1)
+                 (((scope ()) (name n_nationkey)) 2)
+                 (((scope ()) (name n_regionkey)) 1))))))))))
+        (meta
+         ((free ())
+          (refcnt
+           ((((scope ()) (name c_acctbal)) 1) (((scope ()) (name c_address)) 1)
+            (((scope ()) (name c_comment)) 1) (((scope ()) (name c_custkey)) 1)
+            (((scope ()) (name c_mktsegment)) 1) (((scope ()) (name c_name)) 1)
+            (((scope ()) (name c_nationkey)) 1) (((scope ()) (name c_phone)) 1)
+            (((scope ()) (name n_comment)) 1) (((scope ()) (name n_name)) 1)
+            (((scope ()) (name n_nationkey)) 1)
+            (((scope ()) (name n_regionkey)) 1))))))))) |}]
+
+    let%expect_test "join-opt" =
+      opt
+        A.(
+          join
+            (Binop (Eq, Name c_custkey, Name o_custkey))
+            (relation orders)
+            (join
+               (Binop (Eq, Name c_nationkey, Name n_nationkey))
+               (relation nation) (relation customer)))
+      |> [%sexp_of: (float array * t) list] |> print_s;
+      [%expect
+        {|
+    (((1000)
+      (Flat
+       ((node
+         (Join
+          ((pred
+            (Binop
+             (Eq (Name ((scope ()) (name c_custkey)))
+              (Name ((scope ()) (name o_custkey))))))
+           (r1
+            ((node
+              (Join
+               ((pred
+                 (Binop
+                  (Eq (Name ((scope ()) (name c_nationkey)))
+                   (Name ((scope ()) (name n_nationkey))))))
+                (r1
+                 ((node
+                   (Relation
+                    ((r_name customer)
+                     (r_schema
+                      ((((scope ()) (name c_custkey)) ((scope ()) (name c_name))
+                        ((scope ()) (name c_address))
+                        ((scope ()) (name c_nationkey))
+                        ((scope ()) (name c_phone)) ((scope ()) (name c_acctbal))
+                        ((scope ()) (name c_mktsegment))
+                        ((scope ()) (name c_comment))))))))
+                  (meta
+                   ((free ())
+                    (refcnt
+                     ((((scope ()) (name c_acctbal)) 1)
+                      (((scope ()) (name c_address)) 1)
+                      (((scope ()) (name c_comment)) 1)
+                      (((scope ()) (name c_custkey)) 2)
+                      (((scope ()) (name c_mktsegment)) 1)
+                      (((scope ()) (name c_name)) 1)
+                      (((scope ()) (name c_nationkey)) 2)
+                      (((scope ()) (name c_phone)) 1)))))))
+                (r2
+                 ((node
+                   (Relation
+                    ((r_name nation)
+                     (r_schema
+                      ((((scope ()) (name n_nationkey))
+                        ((scope ()) (name n_name))
+                        ((scope ()) (name n_regionkey))
+                        ((scope ()) (name n_comment))))))))
+                  (meta
+                   ((free ())
+                    (refcnt
+                     ((((scope ()) (name n_comment)) 1)
+                      (((scope ()) (name n_name)) 1)
+                      (((scope ()) (name n_nationkey)) 2)
+                      (((scope ()) (name n_regionkey)) 1))))))))))
+             (meta
+              ((free ())
+               (refcnt
+                ((((scope ()) (name c_acctbal)) 1)
+                 (((scope ()) (name c_address)) 1)
+                 (((scope ()) (name c_comment)) 1)
+                 (((scope ()) (name c_custkey)) 2)
+                 (((scope ()) (name c_mktsegment)) 1)
+                 (((scope ()) (name c_name)) 1)
+                 (((scope ()) (name c_nationkey)) 1)
+                 (((scope ()) (name c_phone)) 1)
+                 (((scope ()) (name n_comment)) 1) (((scope ()) (name n_name)) 1)
+                 (((scope ()) (name n_nationkey)) 1)
+                 (((scope ()) (name n_regionkey)) 1)))))))
+           (r2
+            ((node
+              (Relation
+               ((r_name orders)
+                (r_schema
+                 ((((scope ()) (name o_orderkey)) ((scope ()) (name o_custkey))
+                   ((scope ()) (name o_orderstatus))
+                   ((scope ()) (name o_totalprice))
+                   ((scope ()) (name o_orderdate))
+                   ((scope ()) (name o_orderpriority))
+                   ((scope ()) (name o_clerk)) ((scope ()) (name o_shippriority))
+                   ((scope ()) (name o_comment))))))))
+             (meta
+              ((free ())
+               (refcnt
+                ((((scope ()) (name o_clerk)) 1)
+                 (((scope ()) (name o_comment)) 1)
+                 (((scope ()) (name o_custkey)) 2)
+                 (((scope ()) (name o_orderdate)) 1)
+                 (((scope ()) (name o_orderkey)) 1)
+                 (((scope ()) (name o_orderpriority)) 1)
+                 (((scope ()) (name o_orderstatus)) 1)
+                 (((scope ()) (name o_shippriority)) 1)
+                 (((scope ()) (name o_totalprice)) 1))))))))))
+        (meta
+         ((free ())
+          (refcnt
+           ((((scope ()) (name c_acctbal)) 1) (((scope ()) (name c_address)) 1)
+            (((scope ()) (name c_comment)) 1) (((scope ()) (name c_custkey)) 1)
+            (((scope ()) (name c_mktsegment)) 1) (((scope ()) (name c_name)) 1)
+            (((scope ()) (name c_nationkey)) 1) (((scope ()) (name c_phone)) 1)
+            (((scope ()) (name n_comment)) 1) (((scope ()) (name n_name)) 1)
+            (((scope ()) (name n_nationkey)) 1)
+            (((scope ()) (name n_regionkey)) 1) (((scope ()) (name o_clerk)) 1)
+            (((scope ()) (name o_comment)) 1) (((scope ()) (name o_custkey)) 1)
+            (((scope ()) (name o_orderdate)) 1)
+            (((scope ()) (name o_orderkey)) 1)
+            (((scope ()) (name o_orderpriority)) 1)
+            (((scope ()) (name o_orderstatus)) 1)
+            (((scope ()) (name o_shippriority)) 1)
+            (((scope ()) (name o_totalprice)) 1))))))))) |}]
+  end )
