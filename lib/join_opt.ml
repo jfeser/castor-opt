@@ -67,8 +67,9 @@ module Make (C : Config.S) = struct
 
   let cost join =
     [|
-      ACost.cost
-        (Option.value_exn (O.apply (mk_transform join) Path.root A.empty));
+      ( match (mk_transform join).f Path.root A.empty with
+      | Some (`Result r) -> ACost.cost r
+      | _ -> assert false );
     |]
 
   let opt_nonrec opt parts s =
