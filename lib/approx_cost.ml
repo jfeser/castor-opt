@@ -6,8 +6,6 @@ module A = Abslayout
 module Config = struct
   module type S = sig
     val conn : Db.t
-
-    val cost_conn : Db.t
   end
 end
 
@@ -158,9 +156,7 @@ end
 let%test_module _ =
   ( module struct
     module Config = struct
-      let cost_conn = Db.create "postgresql:///tpch"
-
-      let conn = cost_conn
+      let conn = Db.create "postgresql:///tpch"
 
       let simplify = None
     end
