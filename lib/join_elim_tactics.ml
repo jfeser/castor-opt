@@ -14,7 +14,7 @@ module Make (C : Config.S) = struct
   open O
 
   let to_join r =
-    match r.node with Join {pred; r1; r2} -> Some (pred, r1, r2) | _ -> None
+    match r.node with Join { pred; r1; r2 } -> Some (pred, r1, r2) | _ -> None
 
   let elim_join_nest r =
     let open Option.Let_syntax in
@@ -24,7 +24,7 @@ module Make (C : Config.S) = struct
     let tuple_elems =
       ( schema_exn r1 |> Schema.scoped scope |> Schema.to_select_list
       |> List.map ~f:scalar )
-      @ [filter pred r2]
+      @ [ filter pred r2 ]
     in
     Some (list r1 scope (tuple tuple_elems Cross))
 
@@ -46,12 +46,11 @@ module Make (C : Config.S) = struct
           dep_join r1 join_scope
             (select slist
                (hash_idx
-                  (dedup (select [kl] r1))
+                  (dedup (select [ kl ] r1))
                   hash_scope
                   (filter (r1_scoped hash_scope (Binop (Eq, kl, kr))) r2)
-                  [r1_scoped join_scope kl]))
+                  [ r1_scoped join_scope kl ]))
         in
-        Logs.debug (fun m -> m "%a" pp layout) ;
         Some layout
     | _ -> None
 

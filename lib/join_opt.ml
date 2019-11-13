@@ -49,15 +49,13 @@ module Make (C : Config.S) = struct
             elim_join_nest;
           ]
 
-  let reshape j _ =
-    let rec to_ralgebra = function
-      | Flat r -> r
-      | Nest { lhs; rhs; pred } ->
-          A.join pred (to_ralgebra lhs) (to_ralgebra rhs)
-      | Hash { lkey; rkey; lhs; rhs } ->
-          A.join (Binop (Eq, lkey, rkey)) (to_ralgebra lhs) (to_ralgebra rhs)
-    in
-    Some (to_ralgebra j)
+  let rec to_ralgebra = function
+    | Flat r -> r
+    | Nest { lhs; rhs; pred } -> A.join pred (to_ralgebra lhs) (to_ralgebra rhs)
+    | Hash { lkey; rkey; lhs; rhs } ->
+        A.join (Binop (Eq, lkey, rkey)) (to_ralgebra lhs) (to_ralgebra rhs)
+
+  let reshape j _ = Some (to_ralgebra j)
 
   let mk_transform j = seq (of_func (reshape j)) (emit_joins j)
 
@@ -67,7 +65,7 @@ module Make (C : Config.S) = struct
 
   let cost join =
     [|
-      ( match (mk_transform join).f Path.root A.empty with
+      ( match (mk_transform join).f Path.root (to_ralgebra join) with
       | Some (`Result r) -> ACost.cost r
       | _ -> assert false );
     |]

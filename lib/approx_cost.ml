@@ -29,47 +29,48 @@ module Make (C : Config.S) = struct
 
   let () = Hashtbl.set cache ~key:[] ~data:(Some [ Map.empty (module Name) ])
 
+  let rec query_of_ctx ss = function
+    | [] -> assert false
+    | [ (q, _) ] ->
+        A.select (ss @ List.map (A.schema_exn q) ~f:(fun n -> A.Name n)) q
+    | (q, s) :: qs ->
+        A.dep_join q s
+          (query_of_ctx
+             ( ss
+             @ List.map (A.schema_exn q) ~f:(fun n ->
+                   A.Name (Name.copy ~scope:(Some s) n)) )
+             qs)
+
+  let sample ctx =
+    let schema =
+      List.concat_map ctx ~f:(fun (q, s) ->
+          List.map (A.schema_exn q) ~f:(Name.copy ~scope:(Some s)))
+    in
+    let q = query_of_ctx [] ctx in
+    let sample_query = Sql.sample 10 (Sql.of_ralgebra q |> Sql.to_string) in
+    let%lwt samples =
+      Db.exec_lwt_exn ~timeout:10.0 conn
+        (Schema.schema_exn q |> List.map ~f:Name.type_exn)
+        sample_query
+      |> Lwt_stream.filter_map Result.ok
+      |> Lwt_stream.to_list
+    in
+    if samples = [] then return None
+    else
+      let substs =
+        List.map samples ~f:(fun vs ->
+            Array.to_list vs |> List.map ~f:Value.to_pred |> List.zip_exn schema
+            |> Map.of_alist_exn (module Name))
+      in
+      return (Some substs)
+
   let find ctx =
     match Hashtbl.find cache ctx with
     | Some x -> return x
     | None ->
-        let rec query ss = function
-          | [] -> assert false
-          | [ (q, _) ] ->
-              A.select (ss @ List.map (A.schema_exn q) ~f:(fun n -> A.Name n)) q
-          | (q, s) :: qs ->
-              A.dep_join q s
-                (query
-                   ( ss
-                   @ List.map (A.schema_exn q) ~f:(fun n ->
-                         A.Name (Name.copy ~scope:(Some s) n)) )
-                   qs)
-        in
-        let schema =
-          List.concat_map ctx ~f:(fun (q, s) ->
-              List.map (A.schema_exn q) ~f:(Name.copy ~scope:(Some s)))
-        in
-        let q = query [] ctx in
-        let sample_query = Sql.sample 10 (Sql.of_ralgebra q |> Sql.to_string) in
-        let%lwt samples =
-          Db.exec_cursor_lwt_exn ~timeout:10.0 conn
-            (Schema.schema_exn q |> List.map ~f:Name.type_exn)
-            sample_query
-            (fun tups ->
-              Lwt_stream.filter_map Result.ok tups |> Lwt_stream.to_list)
-        in
-        if samples = [] then (
-          Hashtbl.set cache ~key:ctx ~data:None;
-          return None )
-        else
-          let substs =
-            List.map samples ~f:(fun vs ->
-                Array.to_list vs |> List.map ~f:Value.to_pred
-                |> List.zip_exn schema
-                |> Map.of_alist_exn (module Name))
-          in
-          Hashtbl.set cache ~key:ctx ~data:(Some substs);
-          return (Some substs)
+        let%lwt x = sample ctx in
+        Hashtbl.set cache ~key:ctx ~data:x;
+        return x
 
   class ntuples =
     object (self : 'a)
@@ -104,11 +105,12 @@ module Make (C : Config.S) = struct
                     |> A.select [ Count ]
                     |> Sql.of_ralgebra |> Sql.to_string
                   in
+
                   (* Log.debug (fun m -> m "Computing ntuples: %s" ntuples_query); *)
                   let%lwt count =
-                    Db.exec_cursor_lwt_exn ~timeout:5.0 conn
-                      [ Type.PrimType.int_t ] ntuples_query (fun count_tuples ->
-                        Lwt_stream.get count_tuples)
+                    Db.exec_lwt_exn ~timeout:5.0 conn [ Type.PrimType.int_t ]
+                      ntuples_query
+                    |> Lwt_stream.get
                   in
                   match count with
                   | Some (Ok [| Int c |]) -> return (Some c)
@@ -150,10 +152,7 @@ module Make (C : Config.S) = struct
         Db.relation_count conn r.r_name |> Float.of_int |> return
     end
 
-  let cost q =
-    let c = (new ntuples)#visit_t [] q |> Lwt_main.run in
-    (* Log.debug (fun m -> m "Got cost %f for: %a" c A.pp q); *)
-    c
+  let cost q = (new ntuples)#visit_t [] q |> Lwt_main.run
 end
 
 let%test_module _ =
