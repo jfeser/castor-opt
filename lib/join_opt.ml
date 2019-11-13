@@ -71,8 +71,6 @@ module Make (C : Config.S) = struct
     |]
 
   let opt_nonrec opt parts s =
-    Logs.debug (fun m ->
-        m "Choosing join for space %s." (Join_space.to_string s));
     if Join_space.length s = 1 then
       let j = Flat (Join_space.choose s) in
       Pareto_set.singleton (cost j) j
