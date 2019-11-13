@@ -544,11 +544,12 @@ module Make (C : Config.S) = struct
   let elim_eq_filter =
     seq' (of_func elim_eq_filter ~name:"elim-eq-filter") (try_ filter_const)
 
-  let elim_disjunct r =
+  let elim_disjunct ?(max_clauses = 3) r =
     let open Option.Let_syntax in
     let%bind p, r = to_filter r in
     let clauses = Pred.disjuncts p in
-    if List.length clauses > 1 then
+    let nclauses = List.length clauses in
+    if nclauses > 1 && nclauses <= max_clauses then
       if
         ( try
             Tactics_util.all_disjoint
