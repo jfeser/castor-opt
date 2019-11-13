@@ -78,6 +78,11 @@ cbuild:
 ''')
 
 print('''
+all-opt: opt compile run time validate
+all-gold: compile-gold run-gold time-gold
+''')
+
+print('''
 opt: obuild %s
 .PHONY: opt
 ''' % (' '.join([out_file(b) for b in bench])))
@@ -104,12 +109,12 @@ time: %s
 
 print('''
 run-gold: %s
-.PHONY: run
+.PHONY: run-gold
 ''' % (' '.join(['%s-gold.csv' % b['name'] for b in bench])))
 
 print('''
 time-gold: %s
-.PHONY: time
+.PHONY: time-gold
 ''' % (' '.join(['%s-gold.time' % b['name'] for b in bench])))
 
 print('''
@@ -135,20 +140,20 @@ for b in bench:
 '''.format(out_dir(b), out_file(b), gen_param_types(b)))
 
     print('''
-{0}-opt.csv: {1}
+{0}-opt.csv: {1} {1}/scanner.exe
 \t./{1}/scanner.exe -p {1}/data.bin {2} > $@
 '''.format(b['name'], out_dir(b), gen_param_values(b)))
 
     print('''
-{0}-opt.time: {1}
+{0}-opt.time: {1} {1}/scanner.exe
 \t./{1}/scanner.exe -t $(TIME_PER_BENCH) {1}/data.bin {2} > $@
 \ttime -v ./$</scanner.exe -t $(TIME_PER_BENCH) $</data.bin {1} > {0}-opt.mem
 '''.format(b['name'], out_dir(b), gen_param_values(b)))
 
     print('''
-analysis_{0}-opt.csv.log: {1}
-\t../bin/validate.py {0} {2} {0}-opt.csv
-    '''.format(b['name'], out_dir(b), str(b['ordered'])))
+analysis_{0}-opt.csv.log: {0}-opt.csv
+\t../bin/validate.py {0} {1} $<
+    '''.format(b['name'], str(b['ordered'])))
 
     print('''
 {0}-gold: $(CASTOR_PATH)/bench/tpch/{0}-gold.txt
@@ -157,12 +162,12 @@ analysis_{0}-opt.csv.log: {1}
 '''.format(b['name'], gen_param_types(b)))
 
     print('''
-{0}-gold.csv: {0}-gold
+{0}-gold.csv: {0}-gold {0}-gold/scanner.exe
 \t./$</scanner.exe -p $</data.bin {1} > $@
 '''.format(b['name'], gen_param_values(b)))
 
     print('''
-{0}-gold.time: {0}-gold
+{0}-gold.time: {0}-gold {0}-gold/scanner.exe
 \t./$</scanner.exe -t $(TIME_PER_BENCH) $</data.bin {1} > $@
 \ttime -v ./$</scanner.exe -t $(TIME_PER_BENCH) $</data.bin {1} > {0}-gold.mem
 '''.format(b['name'], gen_param_values(b)))
