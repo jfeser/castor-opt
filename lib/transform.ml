@@ -60,12 +60,13 @@ module Make (Config : Config.S) = struct
 
   let is_serializable r p =
     let r' = Path.get_exn p (R.resolve ~params r) in
-    if is_serializeable r' then
-      (* Logs.debug (fun m -> m "Is serializable: %a" Abslayout.pp r') ; *)
-      true
-    else
-      (* Logs.debug (fun m -> m "Is not serializable: %a" Abslayout.pp r') ; *)
-      false
+    match is_serializeable r' with
+    | Ok () ->
+        (* Logs.debug (fun m -> m "Is serializable: %a" Abslayout.pp r') ; *)
+        true
+    | Error _ ->
+        (* Logs.debug (fun m -> m "Is not serializable: %a" Abslayout.pp r') ; *)
+        false
 
   let has_params r p =
     let r' = R.resolve ~params r in
@@ -174,8 +175,7 @@ module Make (Config : Config.S) = struct
 
   let try_partition tf =
     Branching.(
-      seq_many [ choose (traced F.partition) id; lift tf ]
-      |> lower (min Cost.cost))
+      seq_many [ choose F.partition id; lift tf ] |> lower (min Cost.cost))
 
   let try_ tf rest =
     Branching.(seq (choose (lift tf) id) (lift rest) |> lower (min Cost.cost))
@@ -200,7 +200,7 @@ module Make (Config : Config.S) = struct
         at_ Join_elim_tactics.elim_join_filter
           (Path.all >>? is_join >>| shallowest);
         try_
-          (first (traced F.elim_disjunct) (Path.all >>? is_filter))
+          (first F.elim_disjunct (Path.all >>? is_filter))
           (seq_many
              [
                (* Push constant filters *)
