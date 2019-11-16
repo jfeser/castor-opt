@@ -46,7 +46,7 @@ module Make (C : Config.S) = struct
         [%sexp_of: Set.M(Name).t]
 
   let elim_groupby r =
-    annotate_free r ;
+    annotate_free r;
     match r.node with
     | GroupBy (ps, key, r) -> (
         let key_name = Fresh.name Global.fresh "k%d" in
@@ -60,9 +60,28 @@ module Make (C : Config.S) = struct
         (* Try to remove any remaining parameters from the keys relation. *)
         match over_approx C.params keys with
         | Ok keys ->
-            Some (list keys key_name (select ps (filter filter_pred r)))
+            (* Put all the keys into a tuple, then select out the remaining fields
+             to avoid overlap. *)
+            let key_schema = schema_exn keys in
+            let key_scalars =
+              key_schema |> Schema.scoped key_name |> List.map ~f:Pred.name
+              |> List.map ~f:scalar
+            in
+            let select_rest =
+              schema_exn r
+              |> List.filter ~f:(fun n ->
+                     not (List.mem ~equal:Name.O.( = ) key_schema n))
+              |> List.map ~f:Pred.name
+            in
+            let r' =
+              list keys key_name @@ select ps
+              @@ tuple
+                   (key_scalars @ [ select select_rest @@ filter filter_pred r ])
+                   Cross
+            in
+            Some r'
         | Error err ->
-            Logs.info ~src (fun m -> m "elim-groupby: %a" Error.pp err) ;
+            Logs.info ~src (fun m -> m "elim-groupby: %a" Error.pp err);
             None )
     (* Otherwise, if some keys are computed, fail. *)
     | _ -> None
@@ -82,9 +101,11 @@ module Test = struct
       let open Type.PrimType in
       Set.of_list
         (module Name)
-        [ Name.create ~type_:string_t "param1"
-        ; Name.create ~type_:string_t "param2"
-        ; Name.create ~type_:string_t "param3" ]
+        [
+          Name.create ~type_:string_t "param1";
+          Name.create ~type_:string_t "param2";
+          Name.create ~type_:string_t "param3";
+        ]
 
     let param_ctx = Map.empty (module Name)
 
@@ -99,11 +120,11 @@ module Test = struct
   open Ops
 
   let with_logs f =
-    Logs.(set_reporter (format_reporter ())) ;
-    Logs.Src.set_level src (Some Debug) ;
+    Logs.(set_reporter (format_reporter ()));
+    Logs.Src.set_level src (Some Debug);
     let ret = f () in
-    Logs.Src.set_level src (Some Error) ;
-    Logs.(set_reporter nop_reporter) ;
+    Logs.Src.set_level src (Some Error);
+    Logs.(set_reporter nop_reporter);
     ret
 
   let%expect_test "" =
@@ -140,7 +161,7 @@ groupby([o_year,
     in
     with_logs (fun () ->
         apply elim_groupby Path.root r
-        |> Option.iter ~f:(Format.printf "%a@." Abslayout.pp)) ;
+        |> Option.iter ~f:(Format.printf "%a@." Abslayout.pp));
     [%expect
       {|
       alist(dedup(
@@ -171,28 +192,32 @@ groupby([o_year,
         select([o_year,
                 (sum((if (nation_name = param1) then volume else 0.0)) /
                 sum(volume)) as mkt_share],
-          filter((o_year = k0.o_year),
-            select([to_year(o_orderdate) as o_year,
-                    (l_extendedprice * (1 - l_discount)) as volume,
-                    n2_name as nation_name],
-              join((p_partkey = l_partkey),
-                join((s_suppkey = l_suppkey),
-                  join((l_orderkey = o_orderkey),
-                    join((o_custkey = c_custkey),
-                      join((c_nationkey = n1_nationkey),
-                        join((n1_regionkey = r_regionkey),
-                          select([n_regionkey as n1_regionkey,
-                                  n_nationkey as n1_nationkey],
-                            nation),
-                          filter((r_name = param2), region)),
-                        customer),
-                      filter(((o_orderdate >= date("1995-01-01")) &&
-                             (o_orderdate <= date("1996-12-31"))),
-                        orders)),
-                    lineitem),
-                  join((s_nationkey = n2_nationkey),
-                    select([n_nationkey as n2_nationkey, n_name as n2_name],
-                      nation),
-                    supplier)),
-                filter((p_type = param3), part)))))) |}]
+          atuple([ascalar(k0.o_year),
+                  select([volume, nation_name],
+                    filter((o_year = k0.o_year),
+                      select([to_year(o_orderdate) as o_year,
+                              (l_extendedprice * (1 - l_discount)) as volume,
+                              n2_name as nation_name],
+                        join((p_partkey = l_partkey),
+                          join((s_suppkey = l_suppkey),
+                            join((l_orderkey = o_orderkey),
+                              join((o_custkey = c_custkey),
+                                join((c_nationkey = n1_nationkey),
+                                  join((n1_regionkey = r_regionkey),
+                                    select([n_regionkey as n1_regionkey,
+                                            n_nationkey as n1_nationkey],
+                                      nation),
+                                    filter((r_name = param2), region)),
+                                  customer),
+                                filter(((o_orderdate >= date("1995-01-01")) &&
+                                       (o_orderdate <= date("1996-12-31"))),
+                                  orders)),
+                              lineitem),
+                            join((s_nationkey = n2_nationkey),
+                              select([n_nationkey as n2_nationkey,
+                                      n_name as n2_name],
+                                nation),
+                              supplier)),
+                          filter((p_type = param3), part)))))],
+            cross))) |}]
 end
