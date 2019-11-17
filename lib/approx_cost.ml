@@ -33,7 +33,7 @@ module Make (C : Config.S) = struct
     |> Lwt_stream.filter_map (function
          | Ok t -> Some t
          | Error `Timeout -> None
-         | Error (`Exn e) -> raise e)
+         | Error (`Exn e) -> Exn.reraise e (sprintf "Query: %s" sql))
     |> Lwt_stream.to_list
 
   let sample_single ?(n = 3) conn q s =
