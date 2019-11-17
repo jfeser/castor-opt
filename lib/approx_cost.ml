@@ -28,20 +28,20 @@ module Make (C : Config.S) = struct
     include Comparator.Make (T)
   end
 
-  type t = Pred.t Map.M(Name).t option Hashtbl.M(Scope).t
-
-  let cache = Hashtbl.create (module Scope)
-
-  let () = Hashtbl.set cache ~key:[] ~data:(Some [ Map.empty (module Name) ])
+  let exec ?timeout db schema sql =
+    Db.exec_lwt_exn ?timeout db schema sql
+    |> Lwt_stream.filter_map (function
+         | Ok t -> Some t
+         | Error `Timeout -> None
+         | Error (`Exn e) -> raise e)
+    |> Lwt_stream.to_list
 
   let sample_single ?(n = 3) conn q s =
     let schema = A.schema_exn q in
     let fetch_sample sql =
-      Db.exec_lwt_exn ~timeout:60.0 conn
+      exec ~timeout:60.0 conn
         (Schema.schema_exn q |> List.map ~f:Name.type_exn)
         sql
-      |> Lwt_stream.filter_map Result.ok
-      |> Lwt_stream.to_list
     in
     let sql =
       A.select (List.map (A.schema_exn q) ~f:(fun n -> A.Name n)) q
@@ -62,38 +62,36 @@ module Make (C : Config.S) = struct
       in
       return (Some substs)
 
-  let rec sample ?(n = 3) = function
-    | [] -> return (Some [ Map.empty (module Name) ])
-    | (q, s) :: ss -> (
-        let%lwt substs = sample_single conn q s in
-        match substs with
-        | Some substs ->
-            let%lwt samples =
-              Lwt_list.map_p
-                (fun subst ->
-                  let%lwt samples =
-                    List.map ss ~f:(fun (q, s) -> (A.subst subst q, s))
-                    |> sample
-                  in
-                  return
-                  @@ Option.map samples ~f:(List.map ~f:(Map.merge_exn subst)))
-                substs
-            in
-            let samples =
-              List.filter_map samples ~f:Fun.id |> List.concat |> List.permute
-            in
-            let samples = List.take samples n in
-            if samples = [] then return None else return (Some samples)
-        | None -> return None )
+  (** Sample n tuples from a context. *)
+  let sample =
+    let rec sample n = function
+      | [] -> return (Some [ Map.empty (module Name) ])
+      | (q, s) :: ss -> (
+          let%lwt substs = sample_single conn q s in
+          match substs with
+          | Some substs ->
+              let%lwt samples =
+                Lwt_list.map_p
+                  (fun subst ->
+                    let%lwt samples =
+                      List.map ss ~f:(fun (q, s) -> (A.subst subst q, s))
+                      |> sample n
+                    in
+                    return
+                    @@ Option.map samples ~f:(List.map ~f:(Map.merge_exn subst)))
+                  substs
+              in
+              let samples =
+                List.filter_map samples ~f:Fun.id |> List.concat |> List.permute
+              in
+              let samples = List.take samples n in
+              if samples = [] then return None else return (Some samples)
+          | None -> return None )
+    in
+    let memo = Memo.general (fun (n, ctx) -> sample n ctx) in
+    fun ?(n = 3) ctx -> memo (n, ctx)
 
-  let find ctx =
-    match Hashtbl.find cache ctx with
-    | Some x -> return x
-    | None ->
-        let%lwt x = sample ctx in
-        Hashtbl.set cache ~key:ctx ~data:x;
-        return x
-
+  (** Estimate the number of tuples returned by a query q. *)
   let ntuples ctx q =
     let mean l =
       let n = List.sum (module Int) ~f:Fun.id l |> Float.of_int in
@@ -101,7 +99,7 @@ module Make (C : Config.S) = struct
       if d = 0.0 then Float.infinity else n /. d
     in
     let timeout = 10.0 *. (1.0 +. (List.length ctx |> Float.of_int)) in
-    let%lwt substs = find ctx in
+    let%lwt substs = sample ctx in
     match substs with
     | Some ss ->
         let%lwt counts =
@@ -115,14 +113,12 @@ module Make (C : Config.S) = struct
 
               (* Log.debug (fun m -> m "Computing ntuples: %s" ntuples_query); *)
               let%lwt count =
-                Db.exec_lwt_exn ~timeout conn [ Type.PrimType.int_t ]
-                  ntuples_query
-                |> Lwt_stream.get
+                exec ~timeout conn [ Type.PrimType.int_t ] ntuples_query
               in
               match count with
-              | Some (Ok [| Int c |]) -> return (Some c)
-              | Some (Error _) -> return None
-              | _ -> assert false)
+              | [] -> return None
+              | [| Int c |] :: _ -> return (Some c)
+              | _ -> failwith "Unexpected tuples.")
             ss
         in
         let counts = List.filter_map counts ~f:Fun.id in
@@ -265,7 +261,7 @@ module Make (C : Config.S) = struct
 
   let cost q =
     let cost = (new cpu_cost (new ntuples_cost))#visit_t [] q |> Lwt_main.run in
-    Log.debug (fun m -> m "Cost %f for: %a" cost Abslayout.pp q);
+    (* Log.debug (fun m -> m "Cost %f for: %a" cost Abslayout.pp q); *)
     cost
 end
 

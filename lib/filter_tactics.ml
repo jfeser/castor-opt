@@ -522,9 +522,7 @@ module Make (C : Config.S) = struct
       |> List.partition_map ~f:(fun p ->
              match EqDomain.of_pred r p with
              | Ok d -> `Fst (p, d)
-             | Error e ->
-                 Logs.info ~src:elim_eq_filter_src (fun m -> m "%a" Error.pp e);
-                 `Snd p)
+             | Error _ -> `Snd p)
     in
     let inner, eqs = List.unzip eqs in
     let eqs = List.reduce ~f:EqDomain.intersect eqs in

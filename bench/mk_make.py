@@ -90,7 +90,7 @@ opt: obuild %s
 print('''
 compile: cbuild %s
 .PHONY: compile
-''' % (' '.join([out_dir(b) for b in bench])))
+''' % (' '.join(['%s-opt/scanner.exe' % b['name'] for b in bench])))
 
 print('''
 compile-gold: cbuild %s
@@ -134,18 +134,18 @@ for b in bench:
     '''.format(out_file(b), gen_params(b), in_file(b), '%s-opt.log' % b['name']))
 
     print('''
-{0}: {1}
+{0}.scanner.exe: {1}
 \tmkdir -p $@
 \t$(COMPILE) $(CFLAGS) -o $@ -db $(DBC) {2} {1} > $@/compile.log 2>&1
 '''.format(out_dir(b), out_file(b), gen_param_types(b)))
 
     print('''
-{0}-opt.csv: {1} {1}/scanner.exe
+{0}-opt.csv: {1}/scanner.exe
 \t./{1}/scanner.exe -p {1}/data.bin {2} > $@
 '''.format(b['name'], out_dir(b), gen_param_values(b)))
 
     print('''
-{0}-opt.time: {1} {1}/scanner.exe
+{0}-opt.time: {1}/scanner.exe
 \t./{1}/scanner.exe -t $(TIME_PER_BENCH) {1}/data.bin {2} > $@
 \ttime -v ./$</scanner.exe -t $(TIME_PER_BENCH) $</data.bin {1} > {0}-opt.mem
 '''.format(b['name'], out_dir(b), gen_param_values(b)))

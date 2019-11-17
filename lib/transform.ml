@@ -215,15 +215,17 @@ module Make (Config : Config.S) = struct
                     Path.(all >>? is_orderby >>? is_run_time >>| shallowest));
                (* Eliminate comparison filters. *)
                try_
-                 (elim_param_filter F.elim_cmp_filter is_param_cmp_filter)
+                 (traced
+                    (elim_param_filter F.elim_cmp_filter is_param_cmp_filter))
                  (seq_many
                     [
                       (* Eliminate the deepest equality filter. *)
                       try_
                         (traced
-                           (elim_param_filter
-                              (Branching.lift F.elim_eq_filter)
-                              is_param_filter))
+                           (traced
+                              (elim_param_filter
+                                 (Branching.lift F.elim_eq_filter)
+                                 is_param_filter)))
                         (seq_many
                            [
                              F.push_all_filters;
