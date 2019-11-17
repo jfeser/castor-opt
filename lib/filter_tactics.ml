@@ -268,7 +268,8 @@ module Make (C : Config.S) = struct
   let elim_cmp_filter =
     Branching.(local elim_cmp_filter ~name:"elim-cmp-filter")
 
-  let push_filter_cross_tuple p rs =
+  (** Push filters into the arguments of operators that act like cross-products. *)
+  let push_filter_cross constr p rs =
     let ps = Pred.conjuncts p in
     (* Find the earliest placement for each predicate. *)
     let preds = Array.create ~len:(List.length rs) [] in
@@ -284,7 +285,7 @@ module Make (C : Config.S) = struct
     in
     let rest = place_all ps 0 in
     let rs = List.mapi rs ~f:(fun i -> filter (Pred.conjoin preds.(i))) in
-    filter (Pred.conjoin rest) (tuple rs Cross)
+    filter (Pred.conjoin rest) (constr rs)
 
   let push_filter_list p rk rv =
     let scope = scope_exn rk in
@@ -336,7 +337,15 @@ module Make (C : Config.S) = struct
     | Dedup r' -> Some (dedup (filter p r'))
     | Select (ps, r) -> Some (push_filter_select p ps r)
     | ATuple (rs, Concat) -> Some (tuple (List.map rs ~f:(filter p)) Concat)
-    | ATuple (rs, Cross) -> Some (push_filter_cross_tuple p rs)
+    | ATuple (rs, Cross) ->
+        Some (push_filter_cross (fun rs' -> tuple rs' Cross) p rs)
+    | Join j ->
+        Some
+          (push_filter_cross
+             (function
+               | [ r1; r2 ] -> join j.pred r1 r2
+               | _ -> failwith "Expected two queries.")
+             p [ j.r1; j.r2 ])
     (* Lists are a special case because their keys are bound at compile time and
        are not available at runtime. *)
     | AList (rk, rv) -> Some (push_filter_list p rk rv)
@@ -722,6 +731,12 @@ module Make (C : Config.S) = struct
         (dep_join sq_tuple scope
            (filter (Pred.scoped (schema_exn sq_tuple) scope p) r))
     else None
+
+  let push_all_filters =
+    fix (for_all push_filter Path.(all >>? is_run_time >>? is_filter))
+
+  let hoist_all_filters =
+    fix (for_all hoist_filter (Path.all >>? is_filter >> parent))
 
   (* let precompute_filter n =
    *   let exception Failed of Error.t in

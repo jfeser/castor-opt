@@ -20,6 +20,7 @@ module Make (C : Config.S) = struct
   open O
   module S = Simple_tactics.Make (C)
   open S
+  module F = Filter_tactics.Make (C)
   module R = Resolve
   module ACost = Approx_cost.Make (C)
 
@@ -48,6 +49,8 @@ module Make (C : Config.S) = struct
             at_ (emit_joins rhs) (child 1);
             elim_join_nest;
           ]
+
+  let emit_joins j = seq (emit_joins j) F.push_all_filters
 
   let rec to_ralgebra = function
     | Flat r -> r

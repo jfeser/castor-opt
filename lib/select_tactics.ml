@@ -60,6 +60,14 @@ module Make (C : Config.S) = struct
     let p' = visitor#visit_pred () p in
     (!aggs, p')
 
+  (** Split apart tuple that contains only one non-scalar element. *)
+  let split_out_scalars rs =
+    let scalars, non_scalars =
+      List.partition_tf rs ~f:(fun r ->
+          match r.node with AScalar _ -> true | _ -> false)
+    in
+    match non_scalars with [ r ] -> Some (scalars, r) | _ -> None
+
   (** Generate aggregates for collections that act by concatenating their
      children. *)
   let gen_concat_select_list outer_preds inner_schema =
@@ -98,25 +106,28 @@ module Make (C : Config.S) = struct
         | AOrderedIdx (_, rv, _)
         | AList (_, rv)
         | ATuple (rv :: _, Concat) ->
-            let o, i = gen_concat_select_list ps (schema_exn rv) in
-            Some (o, i)
+            gen_concat_select_list ps (schema_exn rv) |> return
+        | ATuple (rv, Cross) ->
+            let%map _, r = split_out_scalars rv in
+            gen_concat_select_list ps (schema_exn r)
         | _ -> None
       in
       let%map mk_collection =
         match r'.node with
         | AHashIdx h ->
-            Some
-              (fun mk_select ->
-                hash_idx' { h with hi_values = mk_select h.hi_values })
+            return @@ fun mk_select ->
+            hash_idx' { h with hi_values = mk_select h.hi_values }
         | AOrderedIdx (rk, rv, m) ->
-            Some
-              (fun mk_select -> ordered_idx rk (scope_exn rk) (mk_select rv) m)
+            return @@ fun mk_select ->
+            ordered_idx rk (scope_exn rk) (mk_select rv) m
         | AList (rk, rv) ->
-            Some (fun mk_select -> list rk (scope_exn rk) (mk_select rv))
+            return @@ fun mk_select -> list rk (scope_exn rk) (mk_select rv)
         | ATuple (r' :: rs', Concat) ->
-            Some
-              (fun mk_select ->
-                tuple (List.map (r' :: rs') ~f:mk_select) Concat)
+            return @@ fun mk_select ->
+            tuple (List.map (r' :: rs') ~f:mk_select) Concat
+        | ATuple (rv, Cross) ->
+            let%map scalars, r = split_out_scalars rv in
+            fun mk_select -> tuple (scalars @ [ mk_select r ]) Cross
         | _ -> None
       in
       let count_n = Fresh.name Global.fresh "count%d" in

@@ -1,4 +1,5 @@
 open! Core
+open Lwt
 open Castor
 open Abslayout
 open Collections
@@ -117,15 +118,18 @@ module Make (Config : Config.S) = struct
   (** For a set of predicates, check whether more than one predicate is true at
      any time. *)
   let all_disjoint ps r =
-    if List.length ps <= 1 then true
-    else
-      let tup =
-        select [ Max (Pred.sum_exn (List.map ps ~f:Pred.pseudo_bool)) ] r
-        |> Sql.of_ralgebra |> Sql.to_string
-        |> Db.exec_cursor_exn conn [ Type.PrimType.int_t ]
-        |> Gen.get
-      in
-      match tup with
-      | Some [| Int x |] -> x <= 1
-      | _ -> failwith "Unexpected tuple."
+    let ret =
+      if List.length ps <= 1 then return true
+      else
+        let%lwt tup =
+          select [ Max (Pred.sum_exn (List.map ps ~f:Pred.pseudo_bool)) ] r
+          |> Sql.of_ralgebra |> Sql.to_string
+          |> Db.exec_lwt_exn conn [ Type.PrimType.int_t ]
+          |> Lwt_stream.get
+        in
+        match tup with
+        | Some (Ok [| Int x |]) -> return (x <= 1)
+        | _ -> failwith "Unexpected tuple."
+    in
+    Lwt_main.run ret
 end

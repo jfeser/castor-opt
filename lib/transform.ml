@@ -138,12 +138,6 @@ module Make (Config : Config.S) = struct
     in
     of_func f ~name:"apply-to-subqueries"
 
-  let push_all_unparameterized_filters =
-    fix (for_all F.push_filter Path.(all >>? is_run_time >>? is_filter))
-
-  let hoist_all_filters =
-    fix (for_all F.hoist_filter (Path.all >>? is_filter >> parent))
-
   let elim_param_filter tf test =
     (* Eliminate comparison filters. *)
     fix
@@ -162,10 +156,10 @@ module Make (Config : Config.S) = struct
                  lift
                    (O.seq_many
                       [
-                        push_all_unparameterized_filters;
+                        F.push_all_filters;
                         O.for_all S.row_store
                           Path.(all >>? is_run_time >>? is_relation);
-                        push_all_unparameterized_filters;
+                        F.push_all_filters;
                         fix project;
                         Simplify_tactic.simplify;
                       ]);
@@ -180,6 +174,12 @@ module Make (Config : Config.S) = struct
   let try_ tf rest =
     Branching.(seq (choose (lift tf) id) (lift rest) |> lower (min Cost.cost))
 
+  let push_all_selects =
+    (* Push selections above collections. *)
+    fix
+      (for_all Select_tactics.push_select
+         Path.(all >>? is_select >>? is_run_time >>? above is_collection))
+
   let opt =
     let open Infix in
     seq_many
@@ -191,11 +191,13 @@ module Make (Config : Config.S) = struct
         (* Hoist parameterized filters as far up as possible. *)
         fix
           (at_ F.hoist_filter
-             (Path.all >>? is_param_filter >>| deepest >>= parent))
-        (* Eliminate unparameterized join nests. *);
-        at_ Join_opt.transform
-          (Path.all >>? is_join >>? not has_free >>| shallowest);
-        push_all_unparameterized_filters;
+             (Path.all >>? is_param_filter >>| deepest >>= parent));
+        (* Eliminate unparameterized join nests. *)
+        traced
+          (at_ Join_opt.transform
+             Path.(
+               all >>? is_join >>? is_run_time >>? not has_free >>| shallowest));
+        F.push_all_filters;
         project;
         at_ Join_elim_tactics.elim_join_filter
           (Path.all >>? is_join >>| shallowest);
@@ -218,12 +220,13 @@ module Make (Config : Config.S) = struct
                     [
                       (* Eliminate the deepest equality filter. *)
                       try_
-                        (elim_param_filter
-                           (Branching.lift F.elim_eq_filter)
-                           is_param_filter)
+                        (traced
+                           (elim_param_filter
+                              (Branching.lift F.elim_eq_filter)
+                              is_param_filter))
                         (seq_many
                            [
-                             push_all_unparameterized_filters;
+                             F.push_all_filters;
                              (* Eliminate all unparameterized relations. *)
                              fix
                                (seq_many
@@ -234,15 +237,10 @@ module Make (Config : Config.S) = struct
                                         >>? not is_serializable
                                         >>? not (contains is_collection)
                                         >>| shallowest);
-                                    push_all_unparameterized_filters;
+                                    F.push_all_filters;
                                   ]);
-                             push_all_unparameterized_filters;
-                             (* Push selections above collections. *)
-                             fix
-                               (for_all Select_tactics.push_select
-                                  Path.(
-                                    all >>? is_select >>? is_run_time
-                                    >>? above is_collection));
+                             F.push_all_filters;
+                             push_all_selects;
                              (* Push orderby operators into compile time position if possible. *)
                              fix
                                (at_ push_orderby
@@ -262,18 +260,20 @@ module Make (Config : Config.S) = struct
                                           for_all (lift S.row_store)
                                             Path.(
                                               all >>? is_run_time
+                                              >>? not (is_scalar || is_tuple)
                                               >>? not has_params);
-                                          lift push_all_unparameterized_filters;
+                                          lift F.push_all_filters;
                                         ]);
                                    filter is_serializable;
                                  ]
                                |> lower (min Cost.cost))
                              (* Cleanup*);
+                             push_all_selects;
                              fix
                                (for_all Dedup_tactics.push_dedup
                                   Path.(all >>? is_dedup));
                              fix project;
-                             push_all_unparameterized_filters;
+                             F.push_all_filters;
                              Simplify_tactic.simplify;
                            ]);
                     ]);
