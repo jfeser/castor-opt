@@ -272,7 +272,7 @@ let%test_module _ =
     module Config = struct
       let conn = Db.create "postgresql:///tpch"
 
-      let cost_conn = Db.create "postgresql:///tpch"
+      let cost_conn = Db.create "postgresql:///tpch_1k"
 
       let simplify = None
 
@@ -307,4 +307,43 @@ let%test_module _ =
       in
       cost q |> printf "%f";
       [%expect {| inf |}]
+
+    let%expect_test "" =
+      let q =
+        M.load_string
+          ~params:
+            (Set.singleton
+               (module Name)
+               (Name.create ~type_:Type.PrimType.date_t "param1"))
+          {|
+        ahashidx(depjoin(select([min(o_orderdate) as lo, max((o_orderdate + month(3))) as hi],
+                                            select([o_orderdate],
+                                              select([o_orderdate as o_orderdate],
+                                                dedup(select([o_orderdate], orders))))) as k1,
+                                    select([range as k0], range(k1.lo, k1.hi))) as s0,
+                           alist(orderby([o_orderpriority],
+                                   dedup(
+                                     select([o_orderpriority],
+                                       filter(((o_orderdate >= s0.k0) &&
+                                              ((o_orderdate < (s0.k0 + month(3))) && exists(ascalar(false as d0)))),
+                                         orders)))) as k2,
+                             select([o_orderpriority, sum(agg3) as order_count],
+                               atuple([ascalar(k2.o_orderpriority),
+                                       filter((count3 > 0),
+                                         select([count() as count3, count() as agg3],
+                                           alist(select([],
+                                                   filter(((o_orderpriority = k2.o_orderpriority) &&
+                                                          ((o_orderdate >= s0.k0) &&
+                                                          ((o_orderdate < (s0.k0 + month(3))) &&
+                                                          exists(filter(
+                                                                   ((l_orderkey = o_orderkey) &&
+                                                                   (l_commitdate < l_receiptdate)),
+                                                                   lineitem))))),
+                                                     orders)) as s21,
+                                             atuple([], cross))))],
+                                 cross))),
+                           param1)
+|}
+      in
+      cost q |> printf "%f"
   end )

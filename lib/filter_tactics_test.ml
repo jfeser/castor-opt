@@ -176,7 +176,6 @@ let%expect_test "elim-eq-filter" =
         ~f:(Format.printf "%a\n" pp) ;
       [%expect
         {|
-        [INFO] ("Not part of an equality predicate." (Bool true))
         [WARNING] elim-eq-filter is not schema preserving: (((scope())(name fresh))((scope())(name g))) != (((scope())(name fresh))((scope())(name g))((scope())(name x0)))
         ahashidx(dedup(
                    atuple([select([fresh as x0],
@@ -241,8 +240,6 @@ let%expect_test "elim-eq-filter" =
         ~f:(Format.printf "%a\n" pp) ;
       [%expect
         {|
-        [INFO] ("No candidate keys."
-         ((Name ((scope (k)) (name f))) (Name ((scope ()) (name param)))))
         [ERROR] Found no equalities.
  |}])
 
