@@ -94,21 +94,21 @@ module Make (C : Config.S) = struct
             |> Pareto_set.of_list
           in
           (* Add nest joins to pareto set. *)
-          let nest_joins =
-            let lhs_parts =
-              Set.union (to_parts (Join_space.to_ralgebra s1) pred) parts
-            in
-            let rhs_parts =
-              Set.union (to_parts (Join_space.to_ralgebra s2) pred) parts
-            in
-            let lhs_set = List.map (opt lhs_parts s1) ~f:(fun (_, j) -> j) in
-            let rhs_set = List.map (opt rhs_parts s2) ~f:(fun (_, j) -> j) in
-            List.cartesian_product lhs_set rhs_set
-            |> List.map ~f:(fun (j1, j2) ->
-                   let j = Nest { lhs = j1; rhs = j2; pred } in
-                   (cost j, j))
-            |> Pareto_set.of_list
-          in
+          (* let nest_joins =
+           *   let lhs_parts =
+           *     Set.union (to_parts (Join_space.to_ralgebra s1) pred) parts
+           *   in
+           *   let rhs_parts =
+           *     Set.union (to_parts (Join_space.to_ralgebra s2) pred) parts
+           *   in
+           *   let lhs_set = List.map (opt lhs_parts s1) ~f:(fun (_, j) -> j) in
+           *   let rhs_set = List.map (opt rhs_parts s2) ~f:(fun (_, j) -> j) in
+           *   List.cartesian_product lhs_set rhs_set
+           *   |> List.map ~f:(fun (j1, j2) ->
+           *          let j = Nest { lhs = j1; rhs = j2; pred } in
+           *          (cost j, j))
+           *   |> Pareto_set.of_list
+           * in *)
           (* Add hash joins to pareto set. *)
           let hash_joins =
             let lhs_schema =
@@ -146,7 +146,7 @@ module Make (C : Config.S) = struct
             in
             Option.value m_s ~default:[] |> List.map ~f:(fun j -> (cost j, j))
           in
-          Pareto_set.union_all [ cs; flat_joins; nest_joins; hash_joins ])
+          Pareto_set.union_all [ cs; flat_joins; (* nest_joins; *) hash_joins ])
 
   let opt =
     let module Key = struct
