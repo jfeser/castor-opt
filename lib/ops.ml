@@ -79,7 +79,7 @@ module Make (C : Config.S) = struct
     let simplify = None
   end)
 
-  let trace = false
+  let trace = true
 
   type ('r, 'p) path_set = 'r -> 'p Seq.t
 
@@ -333,6 +333,19 @@ module Make (C : Config.S) = struct
     in
     global f tf.name
 
+  let simple_traced tf =
+    let f p r =
+      Logs.debug (fun m -> m "Running %s" tf.name);
+      match apply tf p r with
+      | Some r' ->
+          Logs.debug (fun m -> m "Done with %s" tf.name);
+          Some r'
+      | None ->
+          Logs.debug (fun m -> m "Skipping %s" tf.name);
+          None
+    in
+    global f tf.name
+
   let of_func ?(name = "<unknown>") f =
     let tf =
       global
@@ -343,7 +356,7 @@ module Make (C : Config.S) = struct
     in
     let tf = schema_validated tf in
     let tf = if validate then validated tf else tf in
-    if trace then traced tf else tf
+    if trace then simple_traced tf else tf
 
   module Branching = struct
     type t = {
