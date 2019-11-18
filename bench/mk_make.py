@@ -60,6 +60,7 @@ print('COMPILE_PATH=$(CASTOR_PATH)/bin/compile.exe')
 print('OPT=dune exec --no-build $(OPT_PATH) -- ')
 print('OPT_FLAGS=-cost-db $(DB) -cost-timeout 60.0 -db $(DBC) -v')
 print('COMPILE=dune exec --no-build $(COMPILE_PATH) -- ')
+print('TIME_PATH=/usr/bin/time')
 if DEBUG:
     print('CFLAGS=-debug -v')
 else:
@@ -147,7 +148,7 @@ for b in bench:
     print('''
 {0}-opt.time: {1}/scanner.exe
 \t./{1}/scanner.exe -t $(TIME_PER_BENCH) {1}/data.bin {2} > $@
-\ttime -v ./$</scanner.exe -t $(TIME_PER_BENCH) $</data.bin {1} > {0}-opt.mem
+\t$(TIME_PATH) -v ./$</scanner.exe -t $(TIME_PER_BENCH) $</data.bin {1} > {0}-opt.mem
 '''.format(b['name'], out_dir(b), gen_param_values(b)))
 
     print('''
@@ -169,7 +170,7 @@ analysis_{0}-opt.csv.log: {0}-opt.csv
     print('''
 {0}-gold.time: {0}-gold {0}-gold/scanner.exe
 \t./$</scanner.exe -t $(TIME_PER_BENCH) $</data.bin {1} > $@
-\ttime -v ./$</scanner.exe -t $(TIME_PER_BENCH) $</data.bin {1} > {0}-gold.mem
+\t$(TIME_PATH) -v ./$</scanner.exe -t $(TIME_PER_BENCH) $</data.bin {1} > {0}-gold.mem
 '''.format(b['name'], gen_param_values(b)))
 
     print('''
