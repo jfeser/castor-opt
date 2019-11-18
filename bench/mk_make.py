@@ -80,7 +80,7 @@ cbuild:
 
 print('''
 all-opt: opt compile run time validate
-all-gold: compile-gold run-gold time-gold
+all-gold: compile-gold run-gold time-gold validate-gold
 ''')
 
 print('''
@@ -127,6 +127,11 @@ print('''
 validate: %s
 .PHONY: validate
 ''' % (' '.join(['analysis_%s-opt.csv.log' % b['name'] for b in bench])))
+
+print('''
+validate-gold: %s
+.PHONY: validate-gold
+''' % (' '.join(['analysis_%s-gold.csv.log' % b['name'] for b in bench])))
 
 for b in bench:
     print('''
