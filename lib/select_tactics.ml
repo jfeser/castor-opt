@@ -88,57 +88,53 @@ module Make (C : Config.S) = struct
     (outer_aggs, inner_aggs @ inner_fields)
 
   (** Look for evidence of a previous pushed select. *)
-  let already_pushed r' =
-    try
-      match Path.get_exn (Path.child Path.root 1) r' with
-      | { node = Filter (_, { node = Select _; _ }); _ } -> true
-      | _ -> false
-    with _ -> false
+  let already_pushed = function
+    | { node = Filter (_, { node = Select _; _ }); _ } -> None
+    | _ -> Some ()
 
   let push_select r =
     let open Option.Let_syntax in
     let%bind ps, r' = to_select r in
-    if already_pushed r' then None
-    else
-      let%bind outer_preds, inner_preds =
-        match r'.node with
-        | AHashIdx { hi_values = rv; _ }
-        | AOrderedIdx (_, rv, _)
-        | AList (_, rv)
-        | ATuple (rv :: _, Concat) ->
-            gen_concat_select_list ps (schema_exn rv) |> return
-        | ATuple (rv, Cross) ->
-            let%map _, r = split_out_scalars rv in
-            gen_concat_select_list ps (schema_exn r)
-        | _ -> None
-      in
-      let%map mk_collection =
-        match r'.node with
-        | AHashIdx h ->
-            return @@ fun mk_select ->
-            hash_idx' { h with hi_values = mk_select h.hi_values }
-        | AOrderedIdx (rk, rv, m) ->
-            return @@ fun mk_select ->
-            ordered_idx rk (scope_exn rk) (mk_select rv) m
-        | AList (rk, rv) ->
-            return @@ fun mk_select -> list rk (scope_exn rk) (mk_select rv)
-        | ATuple (r' :: rs', Concat) ->
-            return @@ fun mk_select ->
-            tuple (List.map (r' :: rs') ~f:mk_select) Concat
-        | ATuple (rv, Cross) ->
-            let%map scalars, r = split_out_scalars rv in
-            fun mk_select -> tuple (scalars @ [ mk_select r ]) Cross
-        | _ -> None
-      in
-      let count_n = Fresh.name Global.fresh "count%d" in
-      let inner_preds = Pred.as_pred (Count, count_n) :: inner_preds in
-      select outer_preds
-        (mk_collection (fun rv ->
-             filter
-               (Binop (Gt, Name (Name.create count_n), Int 0))
-               (select inner_preds rv)))
+    let%bind (outer_preds, inner_preds), target =
+      match r'.node with
+      | AHashIdx { hi_values = rv; _ }
+      | AOrderedIdx (_, rv, _)
+      | AList (_, rv)
+      | ATuple (rv :: _, Concat) ->
+          (gen_concat_select_list ps (schema_exn rv), rv) |> return
+      | ATuple (rv, Cross) ->
+          let%map _, r = split_out_scalars rv in
+          (gen_concat_select_list ps (schema_exn r), r)
+      | _ -> None
+    in
+    let%bind () = already_pushed target in
+    let%map mk_collection =
+      match r'.node with
+      | AHashIdx h ->
+          return @@ fun mk_select ->
+          hash_idx' { h with hi_values = mk_select h.hi_values }
+      | AOrderedIdx (rk, rv, m) ->
+          return @@ fun mk_select ->
+          ordered_idx rk (scope_exn rk) (mk_select rv) m
+      | AList (rk, rv) ->
+          return @@ fun mk_select -> list rk (scope_exn rk) (mk_select rv)
+      | ATuple (r' :: rs', Concat) ->
+          return @@ fun mk_select ->
+          tuple (List.map (r' :: rs') ~f:mk_select) Concat
+      | ATuple (rv, Cross) ->
+          let%map scalars, r = split_out_scalars rv in
+          fun mk_select -> tuple (scalars @ [ mk_select r ]) Cross
+      | _ -> None
+    in
+    let count_n = Fresh.name Global.fresh "count%d" in
+    let inner_preds = Pred.as_pred (Count, count_n) :: inner_preds in
+    select outer_preds
+      (mk_collection (fun rv ->
+           filter
+             (Binop (Gt, Name (Name.create count_n), Int 0))
+             (select inner_preds rv)))
 
-  let push_select = of_func push_select ~name:"push-select"
+  let push_select = traced (of_func push_select ~name:"push-select")
 end
 
 module Test = struct

@@ -24,11 +24,15 @@ module Make (C : Config.S) = struct
   module R = Resolve
   module ACost = Approx_cost.Make (C)
 
+  [@@@warning "-37"]
+
   type t =
     | Flat of A.t
     | Hash of { lkey : A.pred; lhs : t; rkey : A.pred; rhs : t }
     | Nest of { lhs : t; rhs : t; pred : A.pred }
   [@@deriving sexp_of]
+
+  [@@@warning "+37"]
 
   let rec emit_joins =
     let module J = Join_elim_tactics.Make (C) in
