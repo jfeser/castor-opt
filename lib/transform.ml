@@ -214,71 +214,55 @@ module Make (Config : Config.S) = struct
                  (at_ push_orderby
                     Path.(all >>? is_orderby >>? is_run_time >>| shallowest));
                (* Eliminate comparison filters. *)
-               try_
-                 (traced
-                    (elim_param_filter F.elim_cmp_filter is_param_cmp_filter))
+               traced (elim_param_filter F.elim_cmp_filter is_param_cmp_filter);
+               (* Eliminate the deepest equality filter. *)
+               elim_param_filter
+                 (Branching.lift F.elim_eq_filter)
+                 is_param_filter;
+               F.push_all_filters;
+               (* Eliminate all unparameterized relations. *)
+               fix
                  (seq_many
                     [
-                      (* Eliminate the deepest equality filter. *)
-                      try_
-                        (traced
-                           (traced
-                              (elim_param_filter
-                                 (Branching.lift F.elim_eq_filter)
-                                 is_param_filter)))
-                        (seq_many
-                           [
-                             F.push_all_filters;
-                             (* Eliminate all unparameterized relations. *)
-                             fix
-                               (seq_many
-                                  [
-                                    at_ S.row_store
-                                      Path.(
-                                        all >>? is_run_time >>? not has_params
-                                        >>? not is_serializable
-                                        >>? not (contains is_collection)
-                                        >>| shallowest);
-                                    F.push_all_filters;
-                                  ]);
-                             F.push_all_filters;
-                             push_all_selects;
-                             (* Push orderby operators into compile time position if possible. *)
-                             fix
-                               (at_ push_orderby
-                                  Path.(
-                                    all >>? is_orderby >>? is_run_time
-                                    >>| shallowest))
-                             (* Last-ditch tactic to eliminate orderby. *);
-                             for_all S.row_store
-                               Path.(all >>? is_orderby >>? is_run_time);
-                             (* Try throwing away structure if it reduces overall cost. *)
-                             Branching.(
-                               seq_many
-                                 [
-                                   choose id
-                                     (seq_many
-                                        [
-                                          for_all (lift S.row_store)
-                                            Path.(
-                                              all >>? is_run_time
-                                              >>? not (is_scalar || is_tuple)
-                                              >>? not has_params);
-                                          lift F.push_all_filters;
-                                        ]);
-                                   filter is_serializable;
-                                 ]
-                               |> lower (min Cost.cost))
-                             (* Cleanup*);
-                             push_all_selects;
-                             fix
-                               (for_all Dedup_tactics.push_dedup
-                                  Path.(all >>? is_dedup));
-                             fix project;
-                             F.push_all_filters;
-                             Simplify_tactic.simplify;
-                           ]);
+                      at_ S.row_store
+                        Path.(
+                          all >>? is_run_time >>? not has_params
+                          >>? not is_serializable
+                          >>? not (contains is_collection)
+                          >>| shallowest);
+                      F.push_all_filters;
                     ]);
+               F.push_all_filters;
+               push_all_selects;
+               (* Push orderby operators into compile time position if possible. *)
+               fix
+                 (at_ push_orderby
+                    Path.(all >>? is_orderby >>? is_run_time >>| shallowest))
+               (* Last-ditch tactic to eliminate orderby. *);
+               for_all S.row_store Path.(all >>? is_orderby >>? is_run_time);
+               (* Try throwing away structure if it reduces overall cost. *)
+               Branching.(
+                 seq_many
+                   [
+                     choose id
+                       (seq_many
+                          [
+                            for_all (lift S.row_store)
+                              Path.(
+                                all >>? is_run_time
+                                >>? not (is_scalar || is_tuple)
+                                >>? not has_params);
+                            lift F.push_all_filters;
+                          ]);
+                     filter is_serializable;
+                   ]
+                 |> lower (min Cost.cost))
+               (* Cleanup*);
+               push_all_selects;
+               fix (for_all Dedup_tactics.push_dedup Path.(all >>? is_dedup));
+               fix project;
+               F.push_all_filters;
+               Simplify_tactic.simplify;
              ]);
       ]
 
