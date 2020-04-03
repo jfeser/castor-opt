@@ -27,9 +27,18 @@ module Make (Config : Config.S) = struct
     | FuncT ([ t ], _) -> read t
     | FuncT ([ t1; t2 ], _) -> I.(read t1 * read t2)
     | FuncT _ -> failwith "Unexpected function."
-    | TupleT (elem_ts, _) -> List.sum (module I) elem_ts ~f:read
+    | TupleT (elem_ts, { kind = `Concat }) ->
+        List.sum (module I) elem_ts ~f:read
+    | TupleT (elem_ts, { kind = `Cross }) ->
+        let rec cost = function
+          | [] -> I.zero
+          | [ x ] -> read x
+          | x :: xs -> I.(read x + (count x * cost xs))
+        in
+        cost elem_ts
     | HashIdxT (_, vt, _) -> I.(join zero (read vt))
-    | OrderedIdxT (_, vt, _) -> I.(join zero (read vt))
+    | OrderedIdxT (kt, vt, { key_count }) ->
+        I.(join zero (read kt * key_count) + join zero (read vt))
 
   let cost ?(kind = `Avg) =
     Memo.general
