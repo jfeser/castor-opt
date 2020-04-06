@@ -50,7 +50,6 @@ module Make (C : Config.S) = struct
         @@ ordered_idx'
              { o with oi_keys = dedup o.oi_keys; oi_values = dedup o.oi_values }
     | ATuple (ts, Cross) -> Some (tuple (List.map ts ~f:dedup) Cross)
-    | Select _ -> None
     | _ -> None
 
   let push_dedup = O.of_func push_dedup ~name:"push-dedup"

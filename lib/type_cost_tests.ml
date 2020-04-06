@@ -30,7 +30,7 @@ filter((sum_l_quantity > 0),
 |}
   in
   Fmt.pr "%f" (cost r);
-  [%expect {| 2684.000000 |}]
+  [%expect {| 0.000000 |}]
 
 let%expect_test "" =
   let r =
@@ -68,7 +68,7 @@ select([l_orderkey, sum_l_quantity],
 |}
   in
   Fmt.pr "%f" (cost r);
-  [%expect {| 2684.000000 |}]
+  [%expect {| 27.000000 |}]
 
 let%expect_test "" =
   let r =

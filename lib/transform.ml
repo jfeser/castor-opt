@@ -61,15 +61,11 @@ module Make (Config : Config.S) = struct
         then Branching.apply tf p r
         else Seq.singleton r)
 
-  let project r = Some (r |> Resolve.resolve_exn ~params |> Project.project_once)
-
-  let project = of_func project ~name:"project"
-
   module Config = struct
     include Config
 
     let simplify =
-      let tf = fix (seq_many [ project; Sf.simplify ]) in
+      let tf = fix (seq_many [ S.project; Sf.simplify ]) in
       Some (fun r -> Option.value (apply tf Path.root r) ~default:r)
   end
 
@@ -136,7 +132,7 @@ module Make (Config : Config.S) = struct
                         O.for_all S.row_store
                           Path.(all >>? is_run_time >>? is_relation);
                         push_all_runtime_filters;
-                        fix project;
+                        fix S.project;
                         Simplify_tactic.simplify;
                       ]);
                ]
@@ -223,7 +219,7 @@ module Make (Config : Config.S) = struct
                 [
                   try_random @@ traced @@ F.elim_subquery;
                   try_random @@ push_all_runtime_filters;
-                  project;
+                  S.project;
                   traced ~name:"elim-join-filter"
                   @@ at_ Join_elim_tactics.elim_join_filter
                        Path.(all >>? is_join >>| shallowest);
@@ -324,7 +320,7 @@ module Make (Config : Config.S) = struct
                                 for_all Dedup_tactics.elim_dedup
                                   Path.(all >>? is_dedup);
                               ];
-                         fix project;
+                         fix S.project;
                          push_all_runtime_filters;
                          Simplify_tactic.simplify;
                          traced @@ filter is_serializable'';
