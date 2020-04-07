@@ -48,22 +48,22 @@ let nation = Db.relation Config.cost_conn "nation"
 
 let%expect_test "parted-cost" =
   estimate_ntuples_parted (Set.empty (module Name)) (Flat (C.relation orders))
-  |> [%sexp_of: int * int * float] |> print_s;
-  [%expect {| (1000 1000 1000) |}]
+  |> [%sexp_of: float] |> print_s;
+  [%expect {| 1000 |}]
 
 let%expect_test "parted-cost" =
   estimate_ntuples_parted
     (Set.singleton (module Name) o_custkey)
     (Flat (C.relation orders))
-  |> [%sexp_of: int * int * float] |> print_s;
-  [%expect {| (1 2 1.0060362173038229) |}]
+  |> [%sexp_of: float] |> print_s;
+  [%expect {| 2 |}]
 
 let%expect_test "parted-cost" =
   estimate_ntuples_parted
     (Set.singleton (module Name) c_custkey)
     (Flat (C.relation customer))
-  |> [%sexp_of: int * int * float] |> print_s;
-  [%expect {| (1 1 1) |}]
+  |> [%sexp_of: float] |> print_s;
+  [%expect {| 1 |}]
 
 let estimate_cost p r = [| size_cost p r; scan_cost p r |]
 
@@ -89,7 +89,7 @@ let%expect_test "cost" =
           rhs = Flat (relation orders);
         })
   |> [%sexp_of: float array] |> print_s;
-  [%expect {| (272098 67808) |}]
+  [%expect {| (390658 103376) |}]
 
 let%expect_test "cost" =
   estimate_cost
@@ -123,8 +123,8 @@ let%expect_test "cost" =
   |> [%sexp_of: float array] |> print_s;
   [%expect {|
     (193846 47712)
-    (138044 32208)
-    (137660 32233) |}]
+    (193666 45200)
+    (137660 45225) |}]
 
 let%expect_test "to-from-ralgebra" =
   let r =
@@ -197,7 +197,7 @@ let%expect_test "join-opt" =
   |> [%sexp_of: (float array * t) list option] |> print_s;
   [%expect
     {|
-    ((((32233)
+    ((((45225)
        (Hash (lkey (Name ((name n_nationkey) (meta <opaque>))))
         (lhs
          (Flat
@@ -239,55 +239,58 @@ let%expect_test "join-opt" =
   |> [%sexp_of: (float array * t) list option] |> print_s;
   [%expect
     {|
-    ((((68425)
-       (Hash (lkey (Name ((name n_nationkey) (meta <opaque>))))
-        (lhs
-         (Flat
-          ((node
-            (Relation
-             ((r_name nation)
-              (r_schema
-               (((((name n_nationkey) (meta <opaque>)) (IntT))
-                 (((name n_name) (meta <opaque>)) (StringT (padded)))
-                 (((name n_regionkey) (meta <opaque>)) (IntT))
-                 (((name n_comment) (meta <opaque>)) (StringT))))))))
-           (meta <opaque>))))
-        (rkey (Name ((name c_nationkey) (meta <opaque>))))
-        (rhs
-         (Flat
-          ((node
-            (Join
-             ((pred
-               (Binop Eq (Name ((name c_custkey) (meta <opaque>)))
-                (Name ((name o_custkey) (meta <opaque>)))))
-              (r1
-               ((node
-                 (Relation
-                  ((r_name customer)
-                   (r_schema
-                    (((((name c_custkey) (meta <opaque>)) (IntT))
-                      (((name c_name) (meta <opaque>)) (StringT))
-                      (((name c_address) (meta <opaque>)) (StringT))
-                      (((name c_nationkey) (meta <opaque>)) (IntT))
-                      (((name c_phone) (meta <opaque>)) (StringT (padded)))
-                      (((name c_acctbal) (meta <opaque>)) (FixedT))
-                      (((name c_mktsegment) (meta <opaque>)) (StringT (padded)))
-                      (((name c_comment) (meta <opaque>)) (StringT))))))))
-                (meta <opaque>)))
-              (r2
-               ((node
-                 (Relation
-                  ((r_name orders)
-                   (r_schema
-                    (((((name o_orderkey) (meta <opaque>)) (IntT))
-                      (((name o_custkey) (meta <opaque>)) (IntT))
-                      (((name o_orderstatus) (meta <opaque>)) (StringT (padded)))
-                      (((name o_totalprice) (meta <opaque>)) (FixedT))
-                      (((name o_orderdate) (meta <opaque>)) (DateT))
-                      (((name o_orderpriority) (meta <opaque>))
-                       (StringT (padded)))
-                      (((name o_clerk) (meta <opaque>)) (StringT (padded)))
-                      (((name o_shippriority) (meta <opaque>)) (IntT))
-                      (((name o_comment) (meta <opaque>)) (StringT))))))))
-                (meta <opaque>))))))
-           (meta <opaque>)))))))) |}]
+    ((((84000)
+       (Flat
+        ((node
+          (Join
+           ((pred
+             (Binop Eq (Name ((name c_custkey) (meta <opaque>)))
+              (Name ((name o_custkey) (meta <opaque>)))))
+            (r1
+             ((node
+               (Join
+                ((pred
+                  (Binop Eq (Name ((name n_nationkey) (meta <opaque>)))
+                   (Name ((name c_nationkey) (meta <opaque>)))))
+                 (r1
+                  ((node
+                    (Relation
+                     ((r_name nation)
+                      (r_schema
+                       (((((name n_nationkey) (meta <opaque>)) (IntT))
+                         (((name n_name) (meta <opaque>)) (StringT (padded)))
+                         (((name n_regionkey) (meta <opaque>)) (IntT))
+                         (((name n_comment) (meta <opaque>)) (StringT))))))))
+                   (meta <opaque>)))
+                 (r2
+                  ((node
+                    (Relation
+                     ((r_name customer)
+                      (r_schema
+                       (((((name c_custkey) (meta <opaque>)) (IntT))
+                         (((name c_name) (meta <opaque>)) (StringT))
+                         (((name c_address) (meta <opaque>)) (StringT))
+                         (((name c_nationkey) (meta <opaque>)) (IntT))
+                         (((name c_phone) (meta <opaque>)) (StringT (padded)))
+                         (((name c_acctbal) (meta <opaque>)) (FixedT))
+                         (((name c_mktsegment) (meta <opaque>))
+                          (StringT (padded)))
+                         (((name c_comment) (meta <opaque>)) (StringT))))))))
+                   (meta <opaque>))))))
+              (meta <opaque>)))
+            (r2
+             ((node
+               (Relation
+                ((r_name orders)
+                 (r_schema
+                  (((((name o_orderkey) (meta <opaque>)) (IntT))
+                    (((name o_custkey) (meta <opaque>)) (IntT))
+                    (((name o_orderstatus) (meta <opaque>)) (StringT (padded)))
+                    (((name o_totalprice) (meta <opaque>)) (FixedT))
+                    (((name o_orderdate) (meta <opaque>)) (DateT))
+                    (((name o_orderpriority) (meta <opaque>)) (StringT (padded)))
+                    (((name o_clerk) (meta <opaque>)) (StringT (padded)))
+                    (((name o_shippriority) (meta <opaque>)) (IntT))
+                    (((name o_comment) (meta <opaque>)) (StringT))))))))
+              (meta <opaque>))))))
+         (meta <opaque>)))))) |}]

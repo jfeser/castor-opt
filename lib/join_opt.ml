@@ -354,24 +354,16 @@ module Make (Config : Config.S) = struct
     let parts = Set.filter parts ~f:(Set.mem s) in
     let parted_r =
       let c = P.name (Name.create "c") in
-      A.(
-        select
-          [
-            As_pred (Min c, "min");
-            As_pred (Max c, "max");
-            As_pred (Avg c, "avg");
-          ]
-        @@ group_by [ P.as_ Count "c" ] (Set.to_list parts) static_r)
+      A.select [ As_pred (Max c, "max") ]
+      @@ A.group_by [ P.as_ Count "c" ] (Set.to_list parts) static_r
       |> Simplify_tactic.simplify ~dedup:true cost_conn
     in
-    let sql = Sql.of_ralgebra parted_r |> Sql.to_string
-    and schema = Prim_type.[ int_t; int_t; fixed_t ] in
-    let tups = Db.exec_exn cost_conn schema sql in
+    let sql = Sql.of_ralgebra parted_r |> Sql.to_string in
+    let tups = Db.exec_exn cost_conn Prim_type.[ int_t ] sql in
 
     match tups with
-    | [ Int min; Int max; Fixed avg ] :: _ ->
-        (min, max, Fixed_point.to_float avg)
-    | [ Null; Null; Null ] :: _ -> (0, 0, 0.0)
+    | [ Int max ] :: _ -> Float.of_int max
+    | [ Null ] :: _ -> 0.0
     | _ ->
         err (fun m -> m "Unexpected tuples: %s" sql);
         failwith "Unexpected tuples."
@@ -384,11 +376,11 @@ module Make (Config : Config.S) = struct
     let sum = List.sum (module Float) in
     match r with
     | Flat _ | Id _ ->
-        let _, _, nt = estimate_ntuples_parted parts r in
+        let nt = estimate_ntuples_parted parts r in
         (sum (Schema.types (to_ralgebra r)) ~f:Cost.size *. nt)
         +. Cost.list_size
     | Nest { lhs; rhs; pred } ->
-        let _, _, lhs_nt = estimate_ntuples_parted parts lhs in
+        let lhs_nt = estimate_ntuples_parted parts lhs in
         let rhs_per_partition_cost =
           size_cost (Set.union (to_parts (to_ralgebra rhs) pred) parts) rhs
         in
@@ -399,16 +391,16 @@ module Make (Config : Config.S) = struct
     let sum = List.sum (module Float) in
     match r with
     | Flat _ | Id _ ->
-        let _, _, nt = estimate_ntuples_parted parts r in
+        let nt = estimate_ntuples_parted parts r in
         sum (Schema.types (to_ralgebra r)) ~f:Cost.read *. nt
     | Nest { lhs; rhs; pred } ->
-        let _, _, lhs_nt = estimate_ntuples_parted parts lhs in
+        let lhs_nt = estimate_ntuples_parted parts lhs in
         let rhs_per_partition_cost =
           scan_cost (Set.union (to_parts (to_ralgebra rhs) pred) parts) rhs
         in
         scan_cost parts lhs +. (lhs_nt *. rhs_per_partition_cost)
     | Hash { lkey; lhs; rhs; rkey } ->
-        let _, _, nt_lhs = estimate_ntuples_parted parts lhs in
+        let nt_lhs = estimate_ntuples_parted parts lhs in
         let rhs_per_partition_cost =
           let pred = Pred.Infix.(lkey = rkey) in
           scan_cost (Set.union (to_parts (to_ralgebra rhs) pred) parts) rhs
