@@ -1,8 +1,3 @@
-open Collections
-open Ast
-open Abslayout
-open Schema
-module R = Resolve
 module V = Visitors
 
 module Config = struct
@@ -59,7 +54,7 @@ module Make (Config : Config.S) = struct
     Branching.global ~name:"try-random" (fun p r ->
         if Mcmc.Random_choice.rand random (Branching.name tf) (Path.get_exn p r)
         then Branching.apply tf p r
-        else Seq.singleton r)
+        else Sequence.singleton r)
 
   module Config = struct
     include Config
@@ -161,11 +156,11 @@ module Make (Config : Config.S) = struct
         >>? Infix.(
               is_join || is_groupby || is_orderby || is_dedup || is_relation))
         r
-      |> Seq.is_empty |> not
+      |> Sequence.is_empty |> not
     in
     let mis_bound_params =
       Path.(all >>? is_compile_time) r
-      |> Seq.for_all ~f:(fun p ->
+      |> Sequence.for_all ~f:(fun p ->
              not (overlaps (Free.free (Path.get_exn p r)) params))
       |> not
     in
