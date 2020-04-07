@@ -5,11 +5,35 @@ module I = Abs_int
 
 include (val Log.make ~level:(Some Warning) "castor-opt.type-cost")
 
+let timeout = ref None
+
+let kind = ref `Max
+
+let param =
+  let open Command in
+  let kind_type =
+    let kinds = [ ("min", `Min); ("max", `Max); ("avg", `Avg) ] in
+    Arg_type.create (fun s ->
+        List.find_map_exn kinds ~f:(fun (s', k) ->
+            if String.(s = s') then Some k else None))
+  in
+  let open Command.Let_syntax in
+  [%map_open
+    let () = param
+    and timeout' =
+      flag "cost-timeout" (optional float)
+        ~doc:"SEC time to run cost estimation"
+    and kind' =
+      flag "cost-agg"
+        (optional_with_default `Max kind_type)
+        "AGG how to aggregate costs"
+    in
+    timeout := timeout';
+    kind := kind']
+
 module Config = struct
   module type S = sig
     val params : Set.M(Name).t
-
-    val cost_timeout : float option
 
     val cost_conn : Db.t
   end
@@ -40,7 +64,7 @@ module Make (Config : Config.S) = struct
     | OrderedIdxT (kt, vt, { key_count }) ->
         I.(join zero (read kt * key_count) + join zero (read vt))
 
-  let cost ?(kind = `Avg) =
+  let cost ?(kind = !kind) =
     Memo.general
       ~hashable:(Hashtbl.Hashable.of_key (module Ast))
       (fun r ->
@@ -49,8 +73,7 @@ module Make (Config : Config.S) = struct
           let open Result.Let_syntax in
           let%bind layout = load_layout ~params cost_conn r in
           let%bind type_ =
-            strip_meta layout
-            |> Parallel.type_of ?timeout:cost_timeout cost_conn
+            strip_meta layout |> Parallel.type_of ?timeout:!timeout cost_conn
           in
           let c = read type_ in
           match kind with

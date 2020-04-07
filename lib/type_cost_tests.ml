@@ -30,7 +30,7 @@ filter((sum_l_quantity > 0),
 |}
   in
   Fmt.pr "%f" (cost r);
-  [%expect {| 0.000000 |}]
+  [%expect {| 1.000000 |}]
 
 let%expect_test "" =
   let r =
@@ -68,7 +68,7 @@ select([l_orderkey, sum_l_quantity],
 |}
   in
   Fmt.pr "%f" (cost r);
-  [%expect {| 27.000000 |}]
+  [%expect {| 54.000000 |}]
 
 let%expect_test "" =
   let r =
@@ -106,7 +106,7 @@ select([ps_partkey, value],
 |}
   in
   Fmt.pr "%f" (cost r);
-  [%expect {| 2684.000000 |}]
+  [%expect {| 5368.000000 |}]
 
 let%expect_test "" =
   let r =
@@ -173,7 +173,7 @@ depjoin(select([(select([(sum((ps_supplycost * ps_availqty)) * 0.0) as v],
 |}
   in
   Fmt.pr "%f" (cost r);
-  [%expect {| 12974.000000 |}]
+  [%expect {| 25948.000000 |}]
 
 let%expect_test "" =
   let r =
@@ -245,7 +245,7 @@ select([s1_acctbal, s1_name, n1_name, p1_partkey, p1_mfgr, s1_address,
 |}
   in
   Fmt.pr "%f" (cost r);
-  [%expect {| 7398.000000 |}]
+  [%expect {| 14796.000000 |}]
 
 let%expect_test "" =
   let r =
@@ -321,4 +321,4 @@ select([n1_name, n2_name, l_year, revenue],
 |}
   in
   Fmt.pr "%f" (cost r);
-  [%expect {| 15151.000000 |}]
+  [%expect {| 30303.000000 |}]

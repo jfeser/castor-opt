@@ -20,8 +20,6 @@ module Config = struct
 
     include Type_cost.Config.S
 
-    val cost_timeout : float option
-
     val random : Mcmc.Random_choice.t
   end
 end

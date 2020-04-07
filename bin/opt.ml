@@ -30,7 +30,7 @@ let system_exn cmd =
       @@ sprintf "Command '%s' terminated by signal %s" cmd
            (Signal.to_string signal)
 
-let opt conn cost_conn params cost_timeout state query =
+let opt conn cost_conn params state query =
   let open Option.Let_syntax in
   let module Config = struct
     let conn = conn
@@ -38,8 +38,6 @@ let opt conn cost_conn params cost_timeout state query =
     let cost_conn = cost_conn
 
     let params = params
-
-    let cost_timeout = cost_timeout
 
     let random = state
   end in
@@ -97,7 +95,7 @@ let copy_out out_file out_dir query =
   system_exn @@ sprintf "rm -rf %s" out_dir;
   system_exn @@ sprintf "mv -f %s %s" (trial_dir out_dir) out_dir
 
-let main ~params ~cost_timeout ~timeout ~out_dir ~out_file ch =
+let main ~params ~timeout ~out_dir ~out_file ch =
   let conn = Db.create (Sys.getenv_exn "CASTOR_OPT_DB") in
   let cost_conn = conn in
   let params_set =
@@ -111,7 +109,7 @@ let main ~params ~cost_timeout ~timeout ~out_dir ~out_file ch =
   let best_cost = ref Float.infinity in
   let cost state =
     Fresh.reset Global.fresh;
-    match opt conn cost_conn params_set cost_timeout state query with
+    match opt conn cost_conn params_set state query with
     | Some (query', true) -> (
         match eval (trial_dir out_dir) params query' with
         | Ok cost ->
@@ -145,9 +143,6 @@ let () =
       and () = Join_opt.param
       and () = Type.param
       and () = Simplify_tactic.param
-      and cost_timeout =
-        flag "cost-timeout" (optional float)
-          ~doc:"SEC time to run cost estimation"
       and timeout =
         flag "timeout" (optional float) ~doc:"SEC time to run optimizer"
       and params =
@@ -163,5 +158,5 @@ let () =
       and ch =
         anon (maybe_with_default In_channel.stdin ("query" %: Util.channel))
       in
-      fun () -> main ~params ~cost_timeout ~timeout ~out_dir ~out_file ch]
+      fun () -> main ~params ~timeout ~out_dir ~out_file ch]
   |> Command.run
